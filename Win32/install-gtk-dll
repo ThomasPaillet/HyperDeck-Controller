@@ -1,0 +1,4 @@
+#!/bin/sh
+
+for x in `cat Win32/gtk-dll`; do cp -u /mingw32/bin/$x c:/$1; done
+
