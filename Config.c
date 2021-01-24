@@ -620,7 +620,7 @@ void show_config_hyperdecks_window (void)
 			gtk_widget_set_margin_end (widget, 5);
 			gtk_box_pack_start (GTK_BOX (line[i]), widget, FALSE, FALSE, 0);
 
-			hyperdecks[i].ip_entry_buffer[0] = gtk_entry_buffer_new ("10", 2);
+			hyperdecks[i].ip_entry_buffer[0] = gtk_entry_buffer_new (NULL, 0);
 			entry[i][0] = gtk_entry_new_with_buffer (hyperdecks[i].ip_entry_buffer[0]);
 			gtk_entry_set_max_length (GTK_ENTRY (entry[i][0]), 3);
 			gtk_entry_set_width_chars (GTK_ENTRY (entry[i][0]), 3);
@@ -1103,7 +1103,6 @@ void show_config_transitions_window (void)
 
 				transition_stripe_color_button = gtk_color_button_new_with_rgba (&transition_stripe_color);
 				gtk_color_chooser_set_use_alpha (GTK_COLOR_CHOOSER (transition_stripe_color_button), FALSE);
-gtk_widget_set_sensitive (transition_stripe_color_button, FALSE);
 				gtk_box_pack_start (GTK_BOX (box2), transition_stripe_color_button, FALSE, FALSE, 0);
 			gtk_box_pack_start (GTK_BOX (box3), box2, FALSE, FALSE, 0);
 
@@ -1419,4 +1418,3 @@ void write_config_file (void)
 
 	fclose (config_file);
 }
-
