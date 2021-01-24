@@ -479,7 +479,7 @@ void create_main_window (void)
 		hyperdeck_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 			create_hyperdeck_window (&hyperdecks[i]);
-//			gtk_widget_set_sensitive (hyperdecks[i].root_widget, FALSE);
+			gtk_widget_set_sensitive (hyperdecks[i].root_widget, FALSE);
 			gtk_drag_dest_set (hyperdecks[i].root_widget, GTK_DEST_DEFAULT_ALL, &uri_list_target, 1, GDK_ACTION_COPY);
 			g_signal_connect (G_OBJECT (hyperdecks[i].root_widget), "drag-data-received", G_CALLBACK (hyperdeck_drag_data_received), &hyperdecks[i]);
 			gtk_box_pack_start (GTK_BOX (hyperdeck_box), hyperdecks[i].root_widget, FALSE, FALSE, 0);
@@ -638,10 +638,10 @@ int main (int argc, char** argv)
 
 	restore_hyperdeck_state ();
 
-/*	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
+	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 		if (hyperdecks[i].switched_on && hyperdecks[i].adresse_ip_is_valid)
 			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_to_hyperdeck, &hyperdecks[i]);
-	}*/
+	}
 
 	gtk_main ();
 
@@ -661,4 +661,3 @@ int main (int argc, char** argv)
 
 	return 0;
 }
-
