@@ -620,7 +620,7 @@ void show_config_hyperdecks_window (void)
 			gtk_widget_set_margin_end (widget, 5);
 			gtk_box_pack_start (GTK_BOX (line[i]), widget, FALSE, FALSE, 0);
 
-			hyperdecks[i].ip_entry_buffer[0] = gtk_entry_buffer_new (NULL, 0);
+			hyperdecks[i].ip_entry_buffer[0] = gtk_entry_buffer_new (NULL, -1);
 			entry[i][0] = gtk_entry_new_with_buffer (hyperdecks[i].ip_entry_buffer[0]);
 			gtk_entry_set_max_length (GTK_ENTRY (entry[i][0]), 3);
 			gtk_entry_set_width_chars (GTK_ENTRY (entry[i][0]), 3);
@@ -632,7 +632,7 @@ void show_config_hyperdecks_window (void)
 				widget = gtk_label_new (".");
 				gtk_box_pack_start (GTK_BOX (line[i]), widget, FALSE, FALSE, 0);
 
-				hyperdecks[i].ip_entry_buffer[j] = gtk_entry_buffer_new (NULL, 0);
+				hyperdecks[i].ip_entry_buffer[j] = gtk_entry_buffer_new (NULL, -1);
 				entry[i][j] = gtk_entry_new_with_buffer (hyperdecks[i].ip_entry_buffer[j]);
 				gtk_entry_set_max_length (GTK_ENTRY (entry[i][j]), 3);
 				gtk_entry_set_width_chars (GTK_ENTRY (entry[i][j]), 3);
