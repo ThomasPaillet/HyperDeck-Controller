@@ -1,4 +1,4 @@
 # HyperDeck-Controller
 
-![Main window](Screenshots/Main window.png "Main window")
+![MainWindow](Screenshots/MainWindow.png "MainWindow")
 
