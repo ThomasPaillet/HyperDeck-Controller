@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,19 +17,28 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "Config.h"
+
+#include "HyperDeck_Codec.h"
+#include "HyperDeck_Protocol.h"
+#include "Logging.h"
+#include "Misc.h"
+#include "Osc.h"
+#include "Render_Transition_8.h"
+#include "Render_Transition_16.h"
+#include "Transcoding.h"
+#include "Transition.h"
+
 #include <string.h>
 #include <stdio.h>
 #include <libswscale/swscale.h>
-
-#include "HyperDeck.h"
-#include "HyperDeck_Protocol.h"
 
 
 char *config_file_name = "HyperDeck.cfg";
 
 
 #define NB_OF_VIDEO_FORMAT 23
-#define DEFAULT_VIDEO_FORMAT 9
+#define DEFAULT_VIDEO_FORMAT 12
 
 char* video_format_names[NB_OF_VIDEO_FORMAT] = { "NTSC", "PAL", "NTSCp", "PALp", \
 										"720p50", "720p5994", "720p60", \
@@ -45,6 +54,10 @@ GtkWidget *video_format_combo_box_text;
 
 char* file_format_names[NB_OF_VIDEO_FORMAT] = { "QuickTimeProResHQ", "QuickTimeProRes", "QuickTimeProResLT", "QuickTimeProResProxy", "QuickTimeDNxHD220", "QuickTimeDNxHD145", "DNxHD220", "DNxHD145", "QuickTimeDNxHR_HQX", "QuickTimeDNxHR_SQ", "QuickTimeDNxHR_LB", "QuickTimeProRes4444" };
 GtkWidget *file_format_combo_box_text;
+
+GtkEntryBuffer *osc_udp_port_entry_buffer;
+
+GtkWidget *logging_radio_button_on, *log_hyperdeck_check_button, *log_osc_check_button;
 
 
 GtkWidget *preset_lines[NB_OF_PRESETS][NB_OF_HYPERDECKS + 1];
@@ -325,7 +338,9 @@ void check_dnxhd_resolution (void)
 
 		msg_len = sprintf (msg, msg_slot_select_video_format_, video_format);
 
-		for (i = 0; i < NB_OF_HYPERDECKS; i++) if (hyperdecks[i].connected) send (hyperdecks[i].socket, msg, msg_len, 0);
+		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
+			if (hyperdecks[i].connected) send (hyperdecks[i].socket, msg, msg_len, 0);
+		}
 
 		SLEEP (1)
 	}
@@ -463,6 +478,37 @@ void set_file_format (int file_fmt)
 	} 
 }
 
+void save_config_settings (void)
+{
+	guint16 port;
+
+	sscanf (gtk_entry_buffer_get_text (osc_udp_port_entry_buffer), "%hu", &port);
+	if (port < 1024) port = OSC_UDP_PORT;
+
+	if (port != ntohs (osc_address.sin_port)) {
+		stop_osc ();
+
+		osc_address.sin_port = htons (port);
+
+		start_osc ();
+	}
+
+	if (logging != gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (logging_radio_button_on))) {
+		if (logging) stop_logging ();
+		else start_logging ();
+	}
+
+	if (log_hyperdeck != gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (log_hyperdeck_check_button))) {
+		if (log_hyperdeck) stop_hyperdeck_log ();
+		else start_hyperdeck_log ();
+	}
+
+	if (log_osc != gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (log_osc_check_button))) {
+		if (log_osc) stop_osc_log ();
+		else start_osc_log ();
+	}
+}
+
 void config_hyperdecks_window_ok (GtkWidget *window)
 {
 	int i, j, ip[4];
@@ -474,40 +520,50 @@ void config_hyperdecks_window_ok (GtkWidget *window)
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 		for (j = 0; j < 4; j++) {
 			entry_buffer_text = gtk_entry_buffer_get_text (hyperdecks[i].ip_entry_buffer[j]);
+
 			if (sscanf (entry_buffer_text, "%d", &ip[j]) != 1) break;
 			else if (ip[j] < 0) break;
 			else if (ip[j] > 254) break;
 		}
 
 		if (j == 4) {
-			sprintf (hyperdecks[i].new_adresse_ip, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-			hyperdecks[i].adresse_ip_is_valid = TRUE;
-			if (strcmp (hyperdecks[i].new_adresse_ip, hyperdecks[i].adresse_ip) != 0) {
-				if (hyperdecks[i].connected) disconnect_from_hyperdeck (&hyperdecks[i]);
-				strcpy (hyperdecks[i].adresse_ip, hyperdecks[i].new_adresse_ip);
+			sprintf (hyperdecks[i].new_ip_address, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+
+			hyperdecks[i].ip_address_is_valid = TRUE;
+
+			if (strcmp (hyperdecks[i].new_ip_address, hyperdecks[i].ip_address) != 0) {
+				if (hyperdecks[i].connected) disconnect_hyperdeck (&hyperdecks[i]);
+
+				strcpy (hyperdecks[i].ip_address, hyperdecks[i].new_ip_address);
 			}
 		} else {
-			hyperdecks[i].adresse_ip_is_valid = FALSE;
-			hyperdecks[i].adresse_ip[0] = '\0';
-			if (hyperdecks[i].connected) disconnect_from_hyperdeck (&hyperdecks[i]);
+			hyperdecks[i].ip_address_is_valid = FALSE;
+			hyperdecks[i].ip_address[0] = '\0';
+
+			if (hyperdecks[i].connected) disconnect_hyperdeck (&hyperdecks[i]);
 		}
 
+#if NB_OF_HYPERDECKS != 1
 		hyperdecks[i].switched_on = gtk_switch_get_active (GTK_SWITCH (hyperdecks[i].on_off));
-
-		if (!hyperdecks[i].switched_on && hyperdecks[i].connected) disconnect_from_hyperdeck (&hyperdecks[i]);
+#endif
+		if (!hyperdecks[i].switched_on && hyperdecks[i].connected) disconnect_hyperdeck (&hyperdecks[i]);
 	}
 
 	new_format = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (video_format_combo_box_text));
+
 	if (strcmp (new_format, video_format) != 0) {
 		g_free (video_format);
+
 		video_format = new_format;
 
 		set_video_format (gtk_combo_box_get_active (GTK_COMBO_BOX (video_format_combo_box_text)));
 
 		msg_len = sprintf (msg, msg_slot_select_video_format_, video_format);
+
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 			if (hyperdecks[i].connected) send (hyperdecks[i].socket, msg, msg_len, 0);
 		}
+
 		SLEEP (1)
 
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
@@ -519,16 +575,20 @@ void config_hyperdecks_window_ok (GtkWidget *window)
 	} else g_free (new_format);
 
 	new_format = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (file_format_combo_box_text));
+
 	if (strcmp (new_format, file_format) != 0) {
 		g_free (file_format);
+
 		file_format = new_format;
 
 		set_file_format (gtk_combo_box_get_active (GTK_COMBO_BOX (file_format_combo_box_text)));
 
 		msg_len = sprintf (msg, msg_configuration_file_format_, file_format);
+
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 			if (hyperdecks[i].connected) send (hyperdecks[i].socket, msg, msg_len, 0);
 		}
+
 		SLEEP (1)
 
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
@@ -542,10 +602,13 @@ void config_hyperdecks_window_ok (GtkWidget *window)
 	if ((hyperdeck_codec == AV_CODEC_ID_DNXHD) && (codec_quality <= 1)) set_dnxhd_bitrate ();
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
-		if (hyperdecks[i].switched_on && hyperdecks[i].adresse_ip_is_valid && !hyperdecks[i].connected)
-			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_to_hyperdeck, &hyperdecks[i]);
+		if (hyperdecks[i].switched_on && hyperdecks[i].ip_address_is_valid && !hyperdecks[i].connected && (hyperdecks[i].connection_thread == NULL))
+			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_hyperdeck, &hyperdecks[i]);
 	}
 
+#if NB_OF_HYPERDECKS == 1
+	save_config_settings ();
+#endif
 	write_config_file ();
 
 	gtk_widget_destroy (window);
@@ -565,32 +628,111 @@ gboolean digit_key_press (GtkEntry *entry, GdkEventKey *event)
 	else return GDK_EVENT_STOP;
 }
 
+GtkWidget *create_osc_frame (void)
+{
+	GtkWidget *frame, *box1, *box2, *widget;
+	char label[8];
+
+	frame = gtk_frame_new (" OSC ");
+	gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
+	gtk_widget_set_margin_start (frame, 5);
+	gtk_widget_set_margin_end (frame, 5);
+	gtk_widget_set_margin_bottom (frame, 5);
+		box1 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_widget_set_margin_start (box1, 5);
+		gtk_widget_set_margin_end (box1, 5);
+		gtk_widget_set_margin_bottom (box1, 5);
+		gtk_box_set_spacing (GTK_BOX (box1), 5);
+			box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+				widget =  gtk_label_new ("Port UDP :");
+				gtk_widget_set_margin_end (widget, 5);
+				gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
+
+				osc_udp_port_entry_buffer = gtk_entry_buffer_new (label, sprintf (label, "%hu", ntohs (osc_address.sin_port)));
+				widget = gtk_entry_new_with_buffer (osc_udp_port_entry_buffer);
+				gtk_entry_set_input_purpose (GTK_ENTRY (widget), GTK_INPUT_PURPOSE_DIGITS);
+				gtk_entry_set_max_length (GTK_ENTRY (widget), 5);
+				gtk_entry_set_width_chars (GTK_ENTRY (widget), 5);
+				gtk_entry_set_alignment (GTK_ENTRY (widget), 0.5);
+				g_signal_connect (G_OBJECT (widget), "key-press-event", G_CALLBACK (digit_key_press), NULL);
+				gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
+			gtk_box_set_center_widget (GTK_BOX (box1), box2);
+		gtk_container_add (GTK_CONTAINER (frame), box1);
+
+	return frame;
+}
+
+GtkWidget *create_logging_frame (void)
+{
+	GtkWidget *frame, *box, *widget;
+
+	frame = gtk_frame_new (" Journaux ");
+	gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
+	gtk_widget_set_margin_start (frame, 5);
+	gtk_widget_set_margin_end (frame, 5);
+	gtk_widget_set_margin_bottom (frame, 5);
+		box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_widget_set_margin_start (box, 5);
+		gtk_widget_set_margin_end (box, 5);
+		gtk_widget_set_margin_bottom (box, 5);
+		gtk_box_set_spacing (GTK_BOX (box), 5);
+			logging_radio_button_on = gtk_radio_button_new_with_label (NULL, "On");
+			gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (logging_radio_button_on), logging);
+			gtk_box_pack_start (GTK_BOX (box), logging_radio_button_on, FALSE, FALSE, 0);
+
+			widget = gtk_radio_button_new_with_label_from_widget (GTK_RADIO_BUTTON (logging_radio_button_on), "Off");
+			gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (widget), !logging);
+			gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
+
+			widget = gtk_label_new ("OSC");
+			gtk_widget_set_margin_end (widget, 2);
+			gtk_box_pack_end (GTK_BOX (box), widget, FALSE, FALSE, 0);
+
+			log_osc_check_button = gtk_check_button_new ();
+			gtk_widget_set_margin_start (log_osc_check_button, 10);
+			gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (log_osc_check_button), log_osc);
+			gtk_box_pack_end (GTK_BOX (box), log_osc_check_button, FALSE, FALSE, 0);
+
+			widget = gtk_label_new ("HyperDeck");
+			gtk_box_pack_end (GTK_BOX (box), widget, FALSE, FALSE, 0);
+
+			log_hyperdeck_check_button = gtk_check_button_new ();
+			gtk_widget_set_margin_start (log_hyperdeck_check_button, 10);
+			gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (log_hyperdeck_check_button), log_hyperdeck);
+			gtk_box_pack_end (GTK_BOX (box), log_hyperdeck_check_button, FALSE, FALSE, 0);
+		gtk_container_add (GTK_CONTAINER (frame), box);
+
+	return frame;
+}
+
 void show_config_hyperdecks_window (void)
 {
 	int i, j, k, l;
 
-	GtkWidget *config_hyperdecks_window, *box1, *frame, *grid, *box2, *widget, *button_ok, *button_cancel;
+	GtkWidget *window, *box1, *frame, *grid, *box2, *widget;
 	GtkWidget *line[NB_OF_HYPERDECKS];
-	char label_hyperdeck[16];
+	char label_hyperdeck[28];
 	GtkWidget *entry[NB_OF_HYPERDECKS][4];
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 		if ((gtk_widget_get_visible (remuxing_frames[i].frame)) || (gtk_widget_get_visible (transcoding_frames[i].frame)) || (gtk_widget_get_visible (hyperdecks[i].progress_bar))) {
 			show_message_window ("Il n'est pas possible de modifier la configuration des boîtiers Hyperdeck pendant un encodage ou un transfert de fichier !");
+
 			return;
 		}
 	}
 
-	config_hyperdecks_window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title (GTK_WINDOW (config_hyperdecks_window), "Configuration");
-	gtk_window_set_type_hint (GTK_WINDOW (config_hyperdecks_window), GDK_WINDOW_TYPE_HINT_DIALOG);
-	gtk_window_set_default_size (GTK_WINDOW (config_hyperdecks_window), 200, 100);
-	gtk_window_set_modal (GTK_WINDOW (config_hyperdecks_window), TRUE);
-	gtk_window_set_transient_for (GTK_WINDOW (config_hyperdecks_window), GTK_WINDOW (main_window));
-	g_signal_connect (G_OBJECT (config_hyperdecks_window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
+	window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title (GTK_WINDOW (window), "Configuration");
+	gtk_window_set_type_hint (GTK_WINDOW (window), GDK_WINDOW_TYPE_HINT_DIALOG);
+	gtk_window_set_default_size (GTK_WINDOW (window), 200, 100);
+	gtk_window_set_modal (GTK_WINDOW (window), TRUE);
+	gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (main_window));
+	g_signal_connect (G_OBJECT (window), "key-press-event", G_CALLBACK (children_window_key_press), NULL);
+	g_signal_connect (G_OBJECT (window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
 
 	box1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-		frame = gtk_frame_new ("Adresses IP");
+		frame = gtk_frame_new (" Adresses IP ");
 		gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
 		gtk_widget_set_margin_start (frame, 5);
 		gtk_widget_set_margin_end (frame, 5);
@@ -606,15 +748,16 @@ void show_config_hyperdecks_window (void)
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 			line[i] = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 
+#if NB_OF_HYPERDECKS != 1
 			hyperdecks[i].on_off = gtk_switch_new ();
 			gtk_switch_set_active (GTK_SWITCH (hyperdecks[i].on_off), hyperdecks[i].switched_on);
 			g_signal_connect (G_OBJECT (hyperdecks[i].on_off), "notify::active", G_CALLBACK (notify_active_switch_config_hyperdecks_window), line[i]);
 			gtk_widget_set_sensitive (line[i], hyperdecks[i].switched_on);
 			gtk_grid_attach (GTK_GRID (grid), hyperdecks[i].on_off, 0, i , 1, 1);
-
+#endif
 			gtk_grid_attach (GTK_GRID (grid), line[i], 1, i, 1, 1);
 
-			sprintf (label_hyperdeck, "HyperDeck %d:", hyperdecks[i].number + 1);
+			sprintf (label_hyperdeck, "HyperDeck %d :", hyperdecks[i].number + 1);
 			widget = gtk_label_new (label_hyperdeck);
 			gtk_widget_set_margin_start (widget, 5);
 			gtk_widget_set_margin_end (widget, 5);
@@ -641,23 +784,26 @@ void show_config_hyperdecks_window (void)
 				gtk_box_pack_start (GTK_BOX (line[i]), entry[i][j], FALSE, FALSE, 0);
 			}
 
-			if (hyperdecks[i].adresse_ip_is_valid) {
-				k = 0;
-				for (j = 0; j < 3; j++) {
+			if (hyperdecks[i].ip_address_is_valid) {
+				for (j = 0, k = 0; j < 3; j++) {
 					l = 1;
-					while (hyperdecks[i].adresse_ip[k+l] != '.') l++;
-					gtk_entry_buffer_set_text (hyperdecks[i].ip_entry_buffer[j], hyperdecks[i].adresse_ip + k, l);
+					while (hyperdecks[i].ip_address[k+l] != '.') l++;
+
+					gtk_entry_buffer_set_text (hyperdecks[i].ip_entry_buffer[j], hyperdecks[i].ip_address + k, l);
+
 					k += l + 1;
 				}
+
 				l = 1;
-				while (hyperdecks[i].adresse_ip[k+l] != '\0') l++;
-				gtk_entry_buffer_set_text (hyperdecks[i].ip_entry_buffer[j], hyperdecks[i].adresse_ip + k, l);
+				while (hyperdecks[i].ip_address[k+l] != '\0') l++;
+
+				gtk_entry_buffer_set_text (hyperdecks[i].ip_entry_buffer[j], hyperdecks[i].ip_address + k, l);
 			}
 		}
 		gtk_container_add (GTK_CONTAINER (frame), grid);
 		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
 
-		frame = gtk_frame_new ("Format");
+		frame = gtk_frame_new (" Format ");
 		gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
 		gtk_widget_set_margin_start (frame, 5);
 		gtk_widget_set_margin_end (frame, 5);
@@ -668,7 +814,7 @@ void show_config_hyperdecks_window (void)
 			gtk_widget_set_margin_end (box2, 5);
 			gtk_widget_set_margin_bottom (box2, 5);
 			gtk_box_set_spacing (GTK_BOX (box2), 5);
-				widget = gtk_label_new ("Vidéo:");
+				widget = gtk_label_new ("Vidéo :");
 				gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
 
 				video_format_combo_box_text = gtk_combo_box_text_new ();
@@ -678,7 +824,8 @@ void show_config_hyperdecks_window (void)
 				}
 				gtk_box_pack_start (GTK_BOX (box2), video_format_combo_box_text, FALSE, FALSE, 0);
 
-				widget = gtk_label_new ("Fichier:");
+				widget = gtk_label_new ("Fichier :");
+				gtk_widget_set_margin_start (widget, 5);
 				gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
 
 				file_format_combo_box_text = gtk_combo_box_text_new ();
@@ -690,23 +837,30 @@ void show_config_hyperdecks_window (void)
 			gtk_container_add (GTK_CONTAINER (frame), box2);
 		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
 
+#if NB_OF_HYPERDECKS == 1
+		frame = create_osc_frame ();
+		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
+
+		frame = create_logging_frame ();
+		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
+#endif
 		box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 		gtk_widget_set_halign (box2, GTK_ALIGN_CENTER);
 		gtk_widget_set_margin_bottom (box2, 5);
 		gtk_box_set_spacing (GTK_BOX (box2), 5);
 		gtk_box_set_homogeneous (GTK_BOX (box2), TRUE);
-			button_ok = gtk_button_new_with_label ("OK");
-			g_signal_connect_swapped (G_OBJECT (button_ok), "clicked", G_CALLBACK (config_hyperdecks_window_ok), config_hyperdecks_window);
-			gtk_box_pack_start (GTK_BOX (box2), button_ok, TRUE, TRUE, 0);
+			widget = gtk_button_new_with_label ("OK");
+			g_signal_connect_swapped (G_OBJECT (widget), "clicked", G_CALLBACK (config_hyperdecks_window_ok), window);
+			gtk_box_pack_start (GTK_BOX (box2), widget, TRUE, TRUE, 0);
 
-			button_cancel = gtk_button_new_with_label ("Annuler");
-			g_signal_connect_swapped (G_OBJECT (button_cancel), "clicked", G_CALLBACK (gtk_widget_destroy), config_hyperdecks_window);
-			gtk_box_pack_start (GTK_BOX (box2), button_cancel, FALSE, FALSE, 0);
+			widget = gtk_button_new_with_label ("Annuler");
+			g_signal_connect_swapped (G_OBJECT (widget), "clicked", G_CALLBACK (gtk_widget_destroy), window);
+			gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
 		gtk_box_pack_start (GTK_BOX (box1), box2, FALSE, FALSE, 0);
-	gtk_container_add (GTK_CONTAINER (config_hyperdecks_window), box1);
+	gtk_container_add (GTK_CONTAINER (window), box1);
 
-	gtk_window_set_resizable (GTK_WINDOW (config_hyperdecks_window), FALSE);
-	gtk_widget_show_all (config_hyperdecks_window);
+	gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+	gtk_widget_show_all (window);
 }
 
 void notify_active_switch_config_presets_window (GtkSwitch *on_off, GParamSpec *pspec, GtkWidget **lines)
@@ -726,13 +880,16 @@ void config_presets_window_ok (GtkWidget *window)
 
 	for (i = 0; i < NB_OF_PRESETS; i++) {
 		gtk_button_set_label (GTK_BUTTON (presets[i].button), gtk_entry_buffer_get_text (presets[i].entry_buffer));
+
 		presets[i].switched_on = gtk_switch_get_active (GTK_SWITCH (presets[i].on_off));
 		gtk_widget_set_sensitive (presets[i].button, presets[i].switched_on);
 
 		for (j = 0; j < NB_OF_HYPERDECKS; j++) {
 			if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (presets[i].clips[j].radio_button_slot_1))) presets[i].clips[j].slot = 1;
 			if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (presets[i].clips[j].radio_button_slot_2))) presets[i].clips[j].slot = 2;
+
 			g_free (presets[i].clips[j].name);
+
 			presets[i].clips[j].name = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (presets[i].clips[j].combo_box_text));
 		}
 	}
@@ -755,11 +912,11 @@ void radio_button_toggled (GtkToggleButton *button, preset_clip_t *clip)
 	clip_is_here = FALSE;
 
 	gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (clip->combo_box_text));
+
 	label = gtk_button_get_label (GTK_BUTTON (button));
 
 	if (label[0] == '1') {
-		disk_list_tmp = clip->hyperdeck->slot_1_disk_list;
-		for (k = 0; disk_list_tmp != NULL; disk_list_tmp = disk_list_tmp->next, k++) {
+		for (disk_list_tmp = clip->hyperdeck->slot_1_disk_list, k = 0; disk_list_tmp != NULL; disk_list_tmp = disk_list_tmp->next, k++) {
 			gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (clip->combo_box_text), disk_list_tmp->name);
 
 			if ((clip->slot == 1) && (strcmp (clip->name, disk_list_tmp->name) == 0)) {
@@ -767,12 +924,13 @@ void radio_button_toggled (GtkToggleButton *button, preset_clip_t *clip)
 				combo_box_index = k;
 			}
 		}
+
 		gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (clip->combo_box_text), " ");
+
 		if (clip_is_here) gtk_combo_box_set_active (GTK_COMBO_BOX (clip->combo_box_text), k - combo_box_index);
 		else gtk_combo_box_set_active (GTK_COMBO_BOX (clip->combo_box_text), 0);
 	} else if (label[0] == '2') {
-		disk_list_tmp = clip->hyperdeck->slot_2_disk_list;
-		for (k = 0; disk_list_tmp != NULL; disk_list_tmp = disk_list_tmp->next, k++) {
+		for (disk_list_tmp = clip->hyperdeck->slot_2_disk_list, k = 0; disk_list_tmp != NULL; disk_list_tmp = disk_list_tmp->next, k++) {
 			gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (clip->combo_box_text), disk_list_tmp->name);
 
 			if ((clip->slot == 2) && (strcmp (clip->name, disk_list_tmp->name) == 0)) {
@@ -780,7 +938,9 @@ void radio_button_toggled (GtkToggleButton *button, preset_clip_t *clip)
 				combo_box_index = k;
 			}
 		}
+
 		gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (clip->combo_box_text), " ");
+
 		if (clip_is_here) gtk_combo_box_set_active (GTK_COMBO_BOX (clip->combo_box_text), k - combo_box_index);
 		else gtk_combo_box_set_active (GTK_COMBO_BOX (clip->combo_box_text), 0);
 	}
@@ -790,23 +950,24 @@ void show_config_presets_window (void)
 {
 	int i, j, k;
 
-	GtkWidget *config_presets_window, *box1, *frame, *grid, *box2, *widget, *button_ok, *button_cancel;
-	char label_hyperdeck[16];
+	GtkWidget *window, *box1, *frame, *grid, *box2, *widget;
+	char label_hyperdeck[28];
 	const char *preset_name;
 	disk_list_t *disk_list_tmp;
 	int combo_box_index;
 	gboolean clip_is_here;
 
-	config_presets_window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title (GTK_WINDOW (config_presets_window), "Configuration");
-	gtk_window_set_type_hint (GTK_WINDOW (config_presets_window), GDK_WINDOW_TYPE_HINT_DIALOG);
-	gtk_window_set_default_size (GTK_WINDOW (config_presets_window), 200, 200);
-	gtk_window_set_modal (GTK_WINDOW (config_presets_window), TRUE);
-	gtk_window_set_transient_for (GTK_WINDOW (config_presets_window), GTK_WINDOW (main_window));
-	g_signal_connect (G_OBJECT (config_presets_window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
+	window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title (GTK_WINDOW (window), "Configuration");
+	gtk_window_set_type_hint (GTK_WINDOW (window), GDK_WINDOW_TYPE_HINT_DIALOG);
+	gtk_window_set_default_size (GTK_WINDOW (window), 200, 200);
+	gtk_window_set_modal (GTK_WINDOW (window), TRUE);
+	gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (main_window));
+	g_signal_connect (G_OBJECT (window), "key-press-event", G_CALLBACK (children_window_key_press), NULL);
+	g_signal_connect (G_OBJECT (window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
 
 	box1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-		frame = gtk_frame_new ("Presets");
+		frame = gtk_frame_new (" Presets ");
 		gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
 		gtk_widget_set_margin_start (frame, 5);
 		gtk_widget_set_margin_end (frame, 5);
@@ -820,7 +981,7 @@ void show_config_presets_window (void)
 		gtk_widget_set_margin_bottom (grid, 5);
 
 		for (j = 0; j < NB_OF_HYPERDECKS; j++) {
-			sprintf (label_hyperdeck, "HyperDeck %d:", hyperdecks[j].number + 1);
+			sprintf (label_hyperdeck, "HyperDeck %d :", hyperdecks[j].number + 1);
 			widget = gtk_label_new (label_hyperdeck);
 			gtk_widget_set_sensitive (widget, hyperdecks[j].switched_on);
 			gtk_grid_attach (GTK_GRID (grid), widget, 2 + j , 0, 1, 1);
@@ -846,7 +1007,7 @@ void show_config_presets_window (void)
 				if (hyperdecks[j].switched_on) gtk_widget_set_sensitive (preset_lines[i][j], presets[i].switched_on);
 				gtk_grid_attach (GTK_GRID (grid), preset_lines[i][j], 2 + j, 1 + i, 1, 1);
 
-				widget = gtk_label_new ("slot:");
+				widget = gtk_label_new ("slot :");
 				gtk_widget_set_margin_end (widget, 3);
 				gtk_box_pack_start (GTK_BOX (preset_lines[i][j]), widget, FALSE, FALSE, 0);
 
@@ -858,7 +1019,7 @@ void show_config_presets_window (void)
 				g_signal_connect (presets[i].clips[j].radio_button_slot_2, "toggled", G_CALLBACK (radio_button_toggled), &presets[i].clips[j]);
 				gtk_box_pack_start (GTK_BOX (preset_lines[i][j]), presets[i].clips[j].radio_button_slot_2, TRUE, TRUE, 0);
 
-				widget = gtk_label_new ("clip:");
+				widget = gtk_label_new ("clip :");
 				gtk_widget_set_margin_end (widget, 3);
 				gtk_box_pack_start (GTK_BOX (preset_lines[i][j]), widget, FALSE, FALSE, 0);
 
@@ -868,25 +1029,29 @@ void show_config_presets_window (void)
 				clip_is_here = FALSE;
 
 				if (presets[i].clips[j].slot == 1) {
-					disk_list_tmp = hyperdecks[j].slot_1_disk_list;
-					for (k = 0; disk_list_tmp != NULL; disk_list_tmp = disk_list_tmp->next, k++) {
+					for (disk_list_tmp = hyperdecks[j].slot_1_disk_list, k = 0; disk_list_tmp != NULL; disk_list_tmp = disk_list_tmp->next, k++) {
 						gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (presets[i].clips[j].combo_box_text), disk_list_tmp->name);
+
 						if (strcmp (presets[i].clips[j].name, disk_list_tmp->name) == 0) {
 							clip_is_here = TRUE;
 							combo_box_index = k;
 						}
 					}
+
 					gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (presets[i].clips[j].combo_box_text), " ");
+
 					if (clip_is_here) gtk_combo_box_set_active (GTK_COMBO_BOX (presets[i].clips[j].combo_box_text), k - combo_box_index);
 					else gtk_combo_box_set_active (GTK_COMBO_BOX (presets[i].clips[j].combo_box_text), 0);
 				} else if (presets[i].clips[j].slot == 2) {
 					gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (presets[i].clips[j].radio_button_slot_2), TRUE);
 				} else if (hyperdecks[j].slot_selected == 1) {
 					disk_list_tmp = hyperdecks[j].slot_1_disk_list;
+
 					while (disk_list_tmp != NULL) {
 						gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (presets[i].clips[j].combo_box_text), disk_list_tmp->name);
 						disk_list_tmp = disk_list_tmp->next;
 					}
+
 					gtk_combo_box_text_prepend_text (GTK_COMBO_BOX_TEXT (presets[i].clips[j].combo_box_text), " ");
 					gtk_combo_box_set_active (GTK_COMBO_BOX (presets[i].clips[j].combo_box_text), 0);
 				} else if (hyperdecks[j].slot_selected == 2) {
@@ -905,18 +1070,18 @@ void show_config_presets_window (void)
 		gtk_widget_set_margin_bottom (box2, 5);
 		gtk_box_set_spacing (GTK_BOX (box2), 5);
 		gtk_box_set_homogeneous (GTK_BOX (box2), TRUE);
-			button_ok = gtk_button_new_with_label ("OK");
-			g_signal_connect_swapped (button_ok, "clicked", G_CALLBACK (config_presets_window_ok), config_presets_window);
-			gtk_box_pack_start (GTK_BOX (box2), button_ok, TRUE, TRUE, 0);
+			widget = gtk_button_new_with_label ("OK");
+			g_signal_connect_swapped (widget, "clicked", G_CALLBACK (config_presets_window_ok), window);
+			gtk_box_pack_start (GTK_BOX (box2), widget, TRUE, TRUE, 0);
 
-			button_cancel = gtk_button_new_with_label ("Annuler");
-			g_signal_connect_swapped (button_cancel, "clicked", G_CALLBACK (gtk_widget_destroy), config_presets_window);
-			gtk_box_pack_start (GTK_BOX (box2), button_cancel, FALSE, FALSE, 0);
+			widget = gtk_button_new_with_label ("Annuler");
+			g_signal_connect_swapped (widget, "clicked", G_CALLBACK (gtk_widget_destroy), window);
+			gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
 		gtk_box_pack_start (GTK_BOX (box1), box2, FALSE, FALSE, 0);
-	gtk_container_add (GTK_CONTAINER (config_presets_window), box1);
+	gtk_container_add (GTK_CONTAINER (window), box1);
 
-	gtk_window_set_resizable (GTK_WINDOW (config_presets_window), FALSE);
-	gtk_widget_show_all (config_presets_window);
+	gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+	gtk_widget_show_all (window);
 }
 
 void config_transitions_window_ok (GtkWidget *window)
@@ -949,6 +1114,7 @@ void config_transitions_window_ok (GtkWidget *window)
 
 		if (gtk_combo_box_get_active (GTK_COMBO_BOX (transitions[i].combo_box_text)) > 0) {
 			g_free (transitions[i].file_name);
+
 			transitions[i].file_name = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (transitions[i].combo_box_text));
 		} else transitions[i].file_name[0] = '\0';
 	}
@@ -1036,6 +1202,7 @@ void show_config_transitions_window (void)
 		for (j = 0; j < NB_OF_HYPERDECKS; j++) {
 			if (transitions[i].thread[j] != NULL) {
 				show_message_window ("Il n'est pas possible de modifier la configuration des transitions pendant un encodage !");
+
 				return;
 			}
 		}
@@ -1047,10 +1214,11 @@ void show_config_transitions_window (void)
 	gtk_window_set_default_size (GTK_WINDOW (window), 200, 200);
 	gtk_window_set_modal (GTK_WINDOW (window), TRUE);
 	gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (main_window));
+	g_signal_connect (G_OBJECT (window), "key-press-event", G_CALLBACK (children_window_key_press), NULL);
 	g_signal_connect (G_OBJECT (window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
 
 	box1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-		frame = gtk_frame_new ("Transitions");
+		frame = gtk_frame_new (" Transitions ");
 		gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
 		gtk_widget_set_margin_start (frame, 5);
 		gtk_widget_set_margin_end (frame, 5);
@@ -1064,7 +1232,7 @@ void show_config_transitions_window (void)
 			box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 			gtk_widget_set_halign (box2, GTK_ALIGN_CENTER);
 			gtk_box_set_spacing (GTK_BOX (box2), 3);
-				widget = gtk_label_new ("Type:");
+				widget = gtk_label_new ("Type :");
 				gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
 
 				transition_type_radio_buttons[0] = gtk_radio_button_new_with_label (NULL, transition_type_names[0]);
@@ -1076,6 +1244,7 @@ void show_config_transitions_window (void)
 				}
 
 				gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (transition_type_radio_buttons[transition_type]), TRUE);
+
 				for (i = 0; i < NB_OF_TRANSITION_TYPES; i++) {
 					g_signal_connect (G_OBJECT (transition_type_radio_buttons[i]), "toggled", G_CALLBACK (transition_type_radio_button_toggled), GINT_TO_POINTER (i));
 				}
@@ -1083,7 +1252,7 @@ void show_config_transitions_window (void)
 
 			box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 			gtk_box_set_spacing (GTK_BOX (box2), 3);
-				transition_direction_label = gtk_label_new ("Direction:");
+				transition_direction_label = gtk_label_new ("Direction :");
 				gtk_box_pack_start (GTK_BOX (box2), transition_direction_label, FALSE, FALSE, 0);
 
 				box4 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
@@ -1098,7 +1267,7 @@ void show_config_transitions_window (void)
 				gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (transition_return_inv_check_button), transition_return_inv);
 				gtk_box_pack_start (GTK_BOX (box2), transition_return_inv_check_button, FALSE, FALSE, 0);
 
-				transition_stripe_color_label = gtk_label_new ("Couleur:");
+				transition_stripe_color_label = gtk_label_new ("Couleur :");
 				gtk_box_pack_start (GTK_BOX (box2), transition_stripe_color_label, FALSE, FALSE, 0);
 
 				transition_stripe_color_button = gtk_color_button_new_with_rgba (&transition_stripe_color);
@@ -1108,7 +1277,7 @@ void show_config_transitions_window (void)
 
 			box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 			gtk_box_set_spacing (GTK_BOX (box2), 3);
-				transition_stripe_width_label = gtk_label_new ("Largeur de la bande de couleur:");
+				transition_stripe_width_label = gtk_label_new ("Largeur de la bande de couleur :");
 				gtk_box_pack_start (GTK_BOX (box2), transition_stripe_width_label, FALSE, FALSE, 0);
 
 				transition_stripe_width_scale = gtk_scale_new_with_range (GTK_ORIENTATION_HORIZONTAL, 10.0, 100.0, 1.0);
@@ -1120,7 +1289,7 @@ void show_config_transitions_window (void)
 				transition_stripe_width_percent_label = gtk_label_new ("%");
 				gtk_box_pack_start (GTK_BOX (box2), transition_stripe_width_percent_label, FALSE, FALSE, 0);
 
-				transition_nb_shutters_label = gtk_label_new ("Nombre de volets par Hyperdeck:");
+				transition_nb_shutters_label = gtk_label_new ("Nombre de volets par Hyperdeck :");
 				gtk_box_pack_start (GTK_BOX (box2), transition_nb_shutters_label, FALSE, FALSE, 0);
 
 				transition_nb_shutters_scale = gtk_scale_new_with_range (GTK_ORIENTATION_HORIZONTAL, 1.0, 6.0, 1.0);
@@ -1131,7 +1300,7 @@ void show_config_transitions_window (void)
 			gtk_box_pack_start (GTK_BOX (box3), box2, FALSE, FALSE, 0);
 
 			box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-				widget = gtk_label_new ("Durée:");
+				widget = gtk_label_new ("Durée :");
 				gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
 
 				transition_nb_frames_scale = gtk_scale_new_with_range (GTK_ORIENTATION_HORIZONTAL, 5, 125, 1);
@@ -1154,7 +1323,7 @@ void show_config_transitions_window (void)
 		gtk_container_add (GTK_CONTAINER (frame), box3);
 		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
 
-		frame = gtk_frame_new ("Fresques");
+		frame = gtk_frame_new (" Fresques ");
 		gtk_frame_set_label_align (GTK_FRAME (frame), 0.5, 0.5);
 		gtk_widget_set_margin_start (frame, 5);
 		gtk_widget_set_margin_end (frame, 5);
@@ -1227,6 +1396,54 @@ void show_config_transitions_window (void)
 	show_transition_parameters_widgets (transition_type);
 }
 
+void config_settings_window_ok (GtkWidget *window)
+{
+	save_config_settings ();
+
+	write_config_file ();
+
+	gtk_widget_destroy (window);
+}
+
+void show_config_settings_window (void)
+{
+	GtkWidget *window, *box1, *frame, *box2, *widget;
+
+	window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title (GTK_WINDOW (window), "Paramètres");
+	gtk_window_set_type_hint (GTK_WINDOW (window), GDK_WINDOW_TYPE_HINT_DIALOG);
+	gtk_window_set_default_size (GTK_WINDOW (window), 200, 100);
+	gtk_window_set_modal (GTK_WINDOW (window), TRUE);
+	gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (main_window));
+	g_signal_connect (G_OBJECT (window), "key-press-event", G_CALLBACK (children_window_key_press), NULL);
+	g_signal_connect (G_OBJECT (window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
+
+	box1 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+		frame = create_osc_frame ();
+		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
+
+		frame = create_logging_frame ();
+		gtk_box_pack_start (GTK_BOX (box1), frame, FALSE, FALSE, 0);
+
+		box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_widget_set_halign (box2, GTK_ALIGN_CENTER);
+		gtk_widget_set_margin_bottom (box2, 5);
+		gtk_box_set_spacing (GTK_BOX (box2), 5);
+		gtk_box_set_homogeneous (GTK_BOX (box2), TRUE);
+			widget = gtk_button_new_with_label ("OK");
+			g_signal_connect_swapped (G_OBJECT (widget), "clicked", G_CALLBACK (config_settings_window_ok), window);
+			gtk_box_pack_start (GTK_BOX (box2), widget, TRUE, TRUE, 0);
+
+			widget = gtk_button_new_with_label ("Annuler");
+			g_signal_connect_swapped (G_OBJECT (widget), "clicked", G_CALLBACK (gtk_widget_destroy), window);
+			gtk_box_pack_start (GTK_BOX (box2), widget, FALSE, FALSE, 0);
+		gtk_box_pack_start (GTK_BOX (box1), box2, FALSE, FALSE, 0);
+	gtk_container_add (GTK_CONTAINER (window), box1);
+
+	gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+	gtk_widget_show_all (window);
+}
+
 gboolean read_config_file (void)
 {
 	FILE *config_file;
@@ -1237,6 +1454,7 @@ gboolean read_config_file (void)
 	char buffer[256];
 	size_t n;
 	gboolean return_value = TRUE;
+	guint16 port;
 
 	video_format = g_malloc (16);
 	strcpy (video_format, video_format_names[DEFAULT_VIDEO_FORMAT]);
@@ -1249,11 +1467,15 @@ gboolean read_config_file (void)
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 		k = fscanf (config_file, "%c HyperDeck %d: %d.%d.%d.%d\n", &switched_on, &rien, &ip[0], &ip[1], &ip[2], &ip[3]);
+
 		if (k < 2) {
 			for (j = i; j < NB_OF_HYPERDECKS; j++) hyperdecks[j].switched_on = FALSE;
+
 			fclose (config_file);
+
 			return FALSE;
 		}
+
 		if (switched_on == '0') hyperdecks[i].switched_on = FALSE;
 
 		if (k == 6) {
@@ -1263,20 +1485,24 @@ gboolean read_config_file (void)
 			}
 
 			if (j == 4) {
-				sprintf (hyperdecks[i].adresse_ip, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-				hyperdecks[i].adresse_ip_is_valid = TRUE;
+				sprintf (hyperdecks[i].ip_address, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+
+				hyperdecks[i].ip_address_is_valid = TRUE;
 			} else if (hyperdecks[i].switched_on) return_value = FALSE;
 		} else if (hyperdecks[i].switched_on) return_value = FALSE;
 	}
 
 	if (fscanf (config_file, "Video format: %s\n", buffer) == 1) {
 		n = strlen (buffer);
+
 		if (n < 16) {
 			for (i = 0; i < NB_OF_VIDEO_FORMAT; i++) {
 				if (memcmp (video_format_names[i], buffer, n) == 0) {
 					memcpy (video_format, buffer, n);
 					video_format[n] = '\0';
+
 					set_video_format (i);
+
 					break;
 				}
 			}
@@ -1285,12 +1511,15 @@ gboolean read_config_file (void)
 
 	if (fscanf (config_file, "File format: %s\n", buffer) == 1) {
 		n = strlen (buffer);
+
 		if (n < 32) {
 			for (i = 0; i < NB_OF_FILE_FORMAT; i++) {
 				if (memcmp (file_format_names[i], buffer, n) == 0) {
 					memcpy (file_format, buffer, n);
 					file_format[n] = '\0';
+
 					set_file_format (i);
+
 					break;
 				}
 			}
@@ -1299,34 +1528,60 @@ gboolean read_config_file (void)
 
 	if ((hyperdeck_codec == AV_CODEC_ID_DNXHD) && (codec_quality <= 1)) set_dnxhd_bitrate ();
 
+	fscanf (config_file, "OSC Port UDP: %hu\n", &port);
+	if (port < 1024) osc_address.sin_port = htons (OSC_UDP_PORT);
+	else osc_address.sin_port = htons (port);
+
+	fscanf (config_file, "Log: %c\n", &switched_on);
+	if (switched_on == '1') logging = TRUE;
+
+	fscanf (config_file, "Log HyperDeck: %c\n", &switched_on);
+	if (switched_on == '1') log_hyperdeck = TRUE;
+
+	fscanf (config_file, "Log OSC: %c\n", &switched_on);
+	if (switched_on == '1') log_osc = TRUE;
+
+	if (logging) start_logging ();
+
+#if NB_OF_HYPERDECKS != 1
 	for (i = 0; i < NB_OF_PRESETS; i++) {
 		if (fscanf (config_file, "%c Preset %d: ", &switched_on, &rien) != 2) break;
+
 		if (switched_on == '1') presets[i].switched_on = TRUE;
 
 		for (k = 0; k < PRESETS_NAME_LENGTH; k++) {
 			buffer[k] = fgetc (config_file);
+
 			if (buffer[k] == '\n') {
 				buffer[k] = '\0';
+
 				gtk_button_set_label (GTK_BUTTON (presets[i].button), buffer);
+
 				break;
 			} else if (buffer[k] == EOF) {
 				presets[i].switched_on = FALSE;
+
 				break;
 			}
 		}
 
 		for (j = 0; j < NB_OF_HYPERDECKS; j++) {
 			if (fscanf (config_file, "HyperDeck %d: slot: %d, clip name:", &rien, &presets[i].clips[j].slot) != 2) break;
+
 			if ((presets[i].clips[j].slot != 1) && (presets[i].clips[j].slot != 2)) presets[i].clips[j].slot = 1;
+
 			fgetc (config_file);
 
 			for (k = 0; k < CLIP_NAME_LENGTH; k++) {
 				presets[i].clips[j].name[k] = fgetc (config_file);
+
 				if (presets[i].clips[j].name[k] == '\n') {
 					presets[i].clips[j].name[k] = '\0';
+
 					break;
 				} else if (presets[i].clips[j].name[k] == EOF) {
 					presets[i].clips[j].name[0] = '\0';
+
 					break;
 				}
 			}
@@ -1334,44 +1589,60 @@ gboolean read_config_file (void)
 	}
 
 	fscanf (config_file, "Transitions:\ntype: %d, direction: %d, inv: %d, stripe_color:%lf %lf %lf, stripe_width: %d, nb_shutters: %d, duration: %d\n", &transition_type, &transition_direction, &transition_return_inv, &transition_stripe_color.red, &transition_stripe_color.green, &transition_stripe_color.blue, &transition_stripe_width, &transition_nb_shutters, &transition_nb_frames);
+
 	if ((transition_type < 0) || (transition_type >= NB_OF_TRANSITION_TYPES)) transition_type = 0;
+
 	if ((transition_stripe_color.red < 0.0) || (transition_stripe_color.red > 1.0)) transition_stripe_color.red = 1.0;
+
 	if ((transition_stripe_color.green < 0.0) || (transition_stripe_color.green > 1.0)) transition_stripe_color.green = 1.0;
+
 	if ((transition_stripe_color.blue < 0.0) || (transition_stripe_color.blue > 1.0)) transition_stripe_color.blue = 1.0;
+
 	stripe_color_RGB_to_YUV_8 ();
 	stripe_color_RGB_to_YUV_16 ();
+
 	if ((transition_stripe_width < 10) || (transition_stripe_width > 100)) transition_stripe_width = 100;
+
 	if ((transition_nb_shutters < 1) || (transition_nb_shutters > 6)) transition_nb_shutters = 6;
+
 	if ((transition_nb_frames < 5) || (transition_nb_frames > 125)) transition_nb_frames = 25;
 
 	for (i = 0; i < NB_OF_TRANSITIONS; i++) {
 		if (fscanf (config_file, "%c ", &switched_on) != 1) break;
+
 		if (switched_on == '1') transitions[i].switched_on = TRUE;
 
 		for (j = 0; j < TRANSITION_SUFFIX_LENGTH; j++) {
 			transitions[i].suffix[j] = fgetc (config_file);
+
 			if (transitions[i].suffix[j] == '\n') { 
 				transitions[i].suffix[j] = '\0';
+
 				break;
 			} else if (transitions[i].suffix[j] == EOF) {
 				transitions[i].switched_on = FALSE;
 				transitions[i].suffix[0] = '\0';
+
 				break;
 			}
 		}
 
 		for (j = 0; j < CLIP_NAME_LENGTH; j++) {
 			transitions[i].file_name[j] = fgetc (config_file);
+
 			if (transitions[i].file_name[j] == '\n') {
 				transitions[i].file_name[j] = '\0';
+
 				break;
 			} else if (transitions[i].file_name[j] == EOF) {
 				transitions[i].switched_on = FALSE;
 				transitions[i].file_name[0] = '\0';
+
 				break;
 			}
 		}
 	}
+#endif
 
 	fclose (config_file);
 
@@ -1381,7 +1652,10 @@ gboolean read_config_file (void)
 void write_config_file (void)
 {
 	FILE *config_file;
-	int i, j, k, l;
+	int i, j;
+#if NB_OF_HYPERDECKS != 1
+	int k, l;
+#endif
 
 	config_file = fopen (config_file_name, "w");
 
@@ -1389,13 +1663,26 @@ void write_config_file (void)
 		if (hyperdecks[i].switched_on) fputc ('1', config_file);
 		else fputc ('0', config_file);
 
-		if (hyperdecks[i].adresse_ip_is_valid) fprintf (config_file, " HyperDeck %d: %s\n", j, hyperdecks[i].adresse_ip);
+		if (hyperdecks[i].ip_address_is_valid) fprintf (config_file, " HyperDeck %d: %s\n", j, hyperdecks[i].ip_address);
 		else fprintf (config_file, " HyperDeck %d:\n", j);
 	}
 
 	fprintf (config_file, "Video format: %s\n", video_format);
+
 	fprintf (config_file, "File format: %s\n", file_format);
 
+	fprintf (config_file, "OSC Port UDP: %hu\n", ntohs (osc_address.sin_port));
+
+	if (logging) fprintf (config_file, "Log: 1\n");
+	else fprintf (config_file, "Log: 0\n");
+
+	if (log_hyperdeck) fprintf (config_file, "Log HyperDeck: 1\n");
+	else fprintf (config_file, "Log HyperDeck: 0\n");
+
+	if (log_osc) fprintf (config_file, "Log OSC: 1\n");
+	else fprintf (config_file, "Log OSC: 0\n");
+
+#if NB_OF_HYPERDECKS != 1
 	for (i = 0, j = 1; i < NB_OF_PRESETS; i++, j++) {
 		if (presets[i].switched_on) fputc ('1', config_file);
 		else fputc ('0', config_file);
@@ -1411,10 +1698,15 @@ void write_config_file (void)
 	for (i = 0; i < NB_OF_TRANSITIONS; i++) {
 		if (transitions[i].switched_on) fputc ('1', config_file);
 		else fputc ('0', config_file);
+
 		fputc (' ', config_file);
+
 		fprintf (config_file, "%s\n", transitions[i].suffix);
+
 		fprintf (config_file, "%s\n", transitions[i].file_name);
 	}
+#endif
 
 	fclose (config_file);
 }
+

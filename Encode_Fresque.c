@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,46 +17,56 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "Encode_Fresque.h"
+
+#include "File.h"
+#include "Fresque_Batch.h"
+#include "HyperDeck_Codec.h"
+#include "Logging.h"
+#include "Misc.h"
+#include "Transcoding.h"
+#include "Transition.h"
+
+
 #include <libavformat/avformat.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libswscale/swscale.h>
 
-#include "HyperDeck.h"
-
 
 void split_and_encode_fresque (hyperdeck_t* first_hyperdeck, drop_list_t *first_drop_list)
 {
 	fresque_batch_t *fresque_batch_tmp;
 
-	drop_list_t *drop_list_array_ptr[NB_OF_HYPERDECKS];
-	hyperdeck_t* hyperdeck_ptr;
+	drop_list_t *drop_list_ptr_array[NB_OF_HYPERDECKS];
+	hyperdeck_t* hyperdeck;
 	g_source_label_t *source_label;
 
 	AVFormatContext *av_format_context_in = first_drop_list->av_format_context_in;
-	AVCodec *av_codec_in = first_drop_list->av_codec_in;
+	const AVCodec *av_codec_in = first_drop_list->av_codec_in;
 	int stream_index = first_drop_list->stream_index;
 	int second_frame_width, nb_flux;
 
-	AVFormatContext *av_format_context_out[NB_OF_HYPERDECKS] = { NULL };
 	AVCodecContext *av_codec_context_in, *av_codec_context_out[NB_OF_HYPERDECKS];
 	AVStream *av_stream_in, *av_stream_out[NB_OF_HYPERDECKS];
-	AVPacket packet_in, packet_out;
+	AVPacket *packet_in, *packet_out;
 	AVFrame *first_frame_in, *second_frame_in, *frame_in, *fresque_frame;
 	struct SwsContext *sws_context_in = NULL, *fresque_sws_context = NULL;
 	const int *inv_table;
 	int srcRange;
-	const int *table;
+/*	const int *table;
 	int dstRange;
 	int brightness;
 	int contrast;
-	int saturation;
+	int saturation;*/
 	AVFrame *frame_out[NB_OF_HYPERDECKS];
 	int frame_duration[NB_OF_HYPERDECKS];
 	int video_frame_count = 0, i, j;
 	transition_task_t *transition_task;
-DEBUG_S("split_and_encode_fresque")
+
+	LOG_STRING("split_and_encode_fresque ()")
+
 	if (nb_lines == 480) second_frame_width = 720 * first_drop_list->nb_flux;
 	else if (nb_lines == 576) second_frame_width = 720 * first_drop_list->nb_flux;
 	else if (nb_lines == 720) second_frame_width = 1280 * first_drop_list->nb_flux;
@@ -68,31 +78,37 @@ DEBUG_S("split_and_encode_fresque")
 	else nb_flux = first_drop_list->nb_flux;
 
 	fresque_batch_tmp = g_malloc (sizeof (fresque_batch_t));
+
 	memcpy (fresque_batch_tmp->name, first_drop_list->file_name_out, first_drop_list->file_name_out_len);
+
 	fresque_batch_tmp->name[first_drop_list->file_name_out_len] = '\0';
 	fresque_batch_tmp->name_len = first_drop_list->file_name_out_len;
-DEBUG_S(fresque_batch_tmp->name)
 
-	for (i = 1, hyperdeck_ptr = first_hyperdeck + 1; i < nb_flux; i++, hyperdeck_ptr++) {
-		drop_list_array_ptr[i] = g_malloc (sizeof (drop_list_t));
-		drop_list_array_ptr[i]->full_name = NULL;
-		drop_list_array_ptr[i]->file_name_in = NULL;
-		memcpy (drop_list_array_ptr[i]->file_name_out, first_drop_list->file_name_out, first_drop_list->file_name_out_len);
-		drop_list_array_ptr[i]->file_name_out_len = first_drop_list->file_name_out_len;
-		drop_list_array_ptr[i]->file_name_out[drop_list_array_ptr[i]->file_name_out_len++] = (char)hyperdeck_ptr->number + 49;
-		complete_file_name_out (drop_list_array_ptr[i]);
+	LOG_STRING(fresque_batch_tmp->name)
+
+	for (i = 1, hyperdeck = first_hyperdeck + 1; i < nb_flux; i++, hyperdeck++) {
+		drop_list_ptr_array[i] = g_malloc (sizeof (drop_list_t));
+		drop_list_ptr_array[i]->av_format_context_out = NULL;
+		drop_list_ptr_array[i]->full_name = NULL;
+		drop_list_ptr_array[i]->file_name_in = NULL;
+		memcpy (drop_list_ptr_array[i]->file_name_out, first_drop_list->file_name_out, first_drop_list->file_name_out_len);
+		drop_list_ptr_array[i]->file_name_out_len = first_drop_list->file_name_out_len;
+		drop_list_ptr_array[i]->file_name_out[drop_list_ptr_array[i]->file_name_out_len++] = '1' + (char)hyperdeck->number;
+		complete_file_name_out (drop_list_ptr_array[i]);
 
 		source_label = g_malloc (sizeof (g_source_label_t));
-		sprintf (source_label->text, "%s (%s)", drop_list_array_ptr[i]->file_name_out, video_format_label);
+		sprintf (source_label->text, "%s (%s)", drop_list_ptr_array[i]->file_name_out, video_format_label);
 		source_label->label = transcoding_frames[first_hyperdeck->number].dst_file_name_label[i];
+
 		g_idle_add ((GSourceFunc)g_source_label_set_text, source_label);
 
 		g_idle_add ((GSourceFunc)g_source_show_widget, transcoding_frames[first_hyperdeck->number].dst_file_name_label[i]);
 	}
+
 	while (i < NB_OF_HYPERDECKS) g_idle_add ((GSourceFunc)g_source_hide_widget, transcoding_frames[first_hyperdeck->number].dst_file_name_label[i++]);
 
-	drop_list_array_ptr[0] = first_drop_list;
-	first_drop_list->file_name_out[first_drop_list->file_name_out_len++] = (char)first_hyperdeck->number + 49;
+	drop_list_ptr_array[0] = first_drop_list;
+	first_drop_list->file_name_out[first_drop_list->file_name_out_len++] = '1' + (char)first_hyperdeck->number;
 	complete_file_name_out (first_drop_list);
 
 	source_label = g_malloc (sizeof (g_source_label_t));
@@ -107,9 +123,11 @@ DEBUG_S(fresque_batch_tmp->name)
 	av_codec_context_in = avcodec_alloc_context3 (av_codec_in);
 	avcodec_parameters_to_context (av_codec_context_in, av_stream_in->codecpar);
 
-g_mutex_lock (&avcodec_open2_mutex);
+	g_mutex_lock (&avcodec_open2_mutex);
+
 	avcodec_open2 (av_codec_context_in, av_codec_in, NULL);
-g_mutex_unlock (&avcodec_open2_mutex);
+
+	g_mutex_unlock (&avcodec_open2_mutex);
 
 	if (av_codec_context_in->colorspace == AVCOL_SPC_BT709) inv_table = sws_getCoefficients (SWS_CS_ITU709);
 	else if (av_codec_context_in->colorspace == AVCOL_SPC_BT470BG) inv_table = sws_getCoefficients (SWS_CS_ITU601);
@@ -122,9 +140,7 @@ g_mutex_unlock (&avcodec_open2_mutex);
 	if (av_codec_context_in->color_range == AVCOL_RANGE_MPEG) srcRange = 0;
 	else srcRange = 1;
 
-	packet_in.data = NULL;
-	packet_in.size = 0;
-	av_init_packet (&packet_in);
+	packet_in = av_packet_alloc ();
 
 	first_frame_in = av_frame_alloc ();
 
@@ -141,7 +157,7 @@ g_mutex_unlock (&avcodec_open2_mutex);
 
 		sws_context_in = sws_getContext (av_codec_context_in->width, av_codec_context_in->height, av_codec_context_in->pix_fmt, second_frame_width, nb_lines, hyperdeck_pix_fmt, SWS_BILINEAR, NULL, NULL, NULL);
 
-printf ("sws_setColorspaceDetails = %d\n\n", sws_setColorspaceDetails (sws_context_in, inv_table, srcRange, hyperdeck_yuv2rgb_coefficients, 0, 0, 65536, 65536));
+//printf ("sws_setColorspaceDetails = %d\n\n", sws_setColorspaceDetails (sws_context_in, inv_table, srcRange, hyperdeck_yuv2rgb_coefficients, 0, 0, 65536, 65536));
 /*sws_getColorspaceDetails (sws_context_in, &inv_table, &srcRange, &table, &dstRange, &brightness, &contrast, &saturation);
 printf ("inv_table: %d, %d, %d, %d\n", inv_table[0], inv_table[1], inv_table[2], inv_table[3]);
 printf ("table: %d, %d, %d, %d\n", table[0], table[1], table[2], table[3]);
@@ -150,15 +166,18 @@ printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %
 		frame_in = second_frame_in;
 	} else frame_in = first_frame_in;
 
-	for (i = 0, hyperdeck_ptr = first_hyperdeck; i < nb_flux; i++, hyperdeck_ptr++) {
-		create_output_context (hyperdeck_ptr, &av_format_context_out[i], &av_codec_context_out[i], &av_stream_out[i], first_drop_list->creation_time);
+	for (i = 0, hyperdeck = first_hyperdeck; i < nb_flux; i++, hyperdeck++) {
+		create_output_context (hyperdeck, &drop_list_ptr_array[i]->av_format_context_out, &av_codec_context_out[i], &av_stream_out[i], first_drop_list->creation_time);
 
-		if (avformat_write_header (av_format_context_out[i], NULL) < 0) {
+		if (avformat_write_header (drop_list_ptr_array[i]->av_format_context_out, NULL) < 0) {
 			avcodec_free_context (&av_codec_context_out[i]);
-			avformat_free_context (av_format_context_out[i]);
-			if (i == 0) g_free (drop_list_array_ptr[0]->full_name);
-			g_free (drop_list_array_ptr[i]);
-			drop_list_array_ptr[i] = NULL;
+			avformat_free_context (drop_list_ptr_array[i]->av_format_context_out);
+
+			if (i == 0) g_free (drop_list_ptr_array[0]->full_name);
+
+			g_free (drop_list_ptr_array[i]);
+			drop_list_ptr_array[i] = NULL;
+
 			continue;
 		}
 
@@ -167,15 +186,16 @@ printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %
 		frame_out[i] = av_frame_alloc ();
 		frame_out[i]->format = hyperdeck_pix_fmt;
 		frame_out[i]->chroma_location = HYPERDECK_CHROMA_LOCATION;
-		frame_out[i]->key_frame = 1;
+//		frame_out[i]->key_frame = 1;
 		frame_out[i]->pict_type = AV_PICTURE_TYPE_I;
-		if (progressif) {
+
+/*		if (progressif) {
 			frame_out[i]->interlaced_frame = 0;
 			frame_out[i]->top_field_first = 0;
 		} else {
 			frame_out[i]->interlaced_frame = 1;
 			frame_out[i]->top_field_first = 1;
-		}
+		}*/
 		frame_out[i]->color_primaries = hyperdeck_color_primaries;
 		frame_out[i]->color_trc = hyperdeck_color_trc;
 		frame_out[i]->colorspace = hyperdeck_colorspace;
@@ -183,34 +203,36 @@ printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %
 		frame_out[i]->width = hyperdeck_width;
 		frame_out[i]->height = nb_lines;
 		frame_out[i]->sample_aspect_ratio = hyperdeck_sample_aspect_ratio;
+
 		av_frame_get_buffer (frame_out[i], 0);
 	}
 
-	packet_out.data = NULL;
-	packet_out.size = 0;
-	av_init_packet (&packet_out);
+	packet_out = av_packet_alloc ();
 
-	while (av_read_frame (av_format_context_in, &packet_in) == 0) {
-		if (packet_in.stream_index != stream_index) {
-			av_packet_unref (&packet_in);
+	while (av_read_frame (av_format_context_in, packet_in) == 0) {
+		if (packet_in->stream_index != stream_index) {
+			av_packet_unref (packet_in);
+
 			continue;
 		}
 
-		if (avcodec_send_packet (av_codec_context_in, &packet_in) < 0) {
-			av_packet_unref (&packet_in);
+		if (avcodec_send_packet (av_codec_context_in, packet_in) < 0) {
+			av_packet_unref (packet_in);
+
 			continue;
 		}
 
 		av_frame_unref (first_frame_in);
 		if (avcodec_receive_frame (av_codec_context_in, first_frame_in) < 0) {
-			av_packet_unref (&packet_in);
+			av_packet_unref (packet_in);
+
 			continue;
 		}
 
 		if (sws_context_in != NULL) sws_scale (sws_context_in, (const uint8_t * const*)first_frame_in->data, first_frame_in->linesize, 0, first_frame_in->height, second_frame_in->data, second_frame_in->linesize);
 
-		for (i = 0, hyperdeck_ptr = first_hyperdeck; i < nb_flux; i++, hyperdeck_ptr++) {
-			if (drop_list_array_ptr[i] == NULL) continue;
+		for (i = 0, hyperdeck = first_hyperdeck; i < nb_flux; i++, hyperdeck++) {
+			if (drop_list_ptr_array[i] == NULL) continue;
 
 			if (nb_lines == 480) {
 				for (j = 0; j < 480; j++) {
@@ -319,15 +341,16 @@ printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %
 			frame_out[i]->pts = video_frame_count * frame_duration[i];
 			avcodec_send_frame (av_codec_context_out[i], frame_out[i]);
 
-			avcodec_receive_packet (av_codec_context_out[i], &packet_out);
-			packet_out.stream_index = av_stream_out[i]->index;
-			packet_out.duration = frame_duration[i];
-			av_interleaved_write_frame (av_format_context_out[i], &packet_out);
+			avcodec_receive_packet (av_codec_context_out[i], packet_out);
+			packet_out->stream_index = av_stream_out[i]->index;
+			packet_out->duration = frame_duration[i];
+			av_interleaved_write_frame (drop_list_ptr_array[i]->av_format_context_out, packet_out);
 		}
+
 		video_frame_count++;
 		transcoding_frames[first_hyperdeck->number].frame_count = video_frame_count;
 
-		av_packet_unref (&packet_in);
+		av_packet_unref (packet_in);
 	}
 
 	if (sws_context_in != NULL) {
@@ -367,16 +390,19 @@ printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %
 		fresque_batch_tmp->nb_flux = nb_flux;
 		fresque_batch_tmp->first_hyperdeck_number = first_hyperdeck->number;
 
-g_mutex_lock (&fresque_batch_mutex);
+		g_mutex_lock (&fresque_batch_mutex);
+
 		fresque_batch_tmp->next = fresque_batches;
 		fresque_batches = fresque_batch_tmp;
-g_mutex_unlock (&fresque_batch_mutex);
+
+		g_mutex_unlock (&fresque_batch_mutex);
 
 		transcoding_frames[first_hyperdeck->number].nb_frames = (int64_t)frequency;
 
 		for (i = 0; i < NB_OF_TRANSITIONS; i++) {
 			if (transitions[i].switched_on) {
 				transcoding_frames[first_hyperdeck->number].nb_frames += transition_nb_frames * 2;
+
 				if (transition_type == 1) transcoding_frames[first_hyperdeck->number].nb_frames += (transition_nb_frames / nb_flux) * 2;
 
 				transition_task = g_malloc (sizeof (transition_task_t));
@@ -394,36 +420,34 @@ g_mutex_unlock (&fresque_batch_mutex);
 		}
 
 		for (j = 1; j < (int)frequency; j++) {
-			for (i = 0, hyperdeck_ptr = first_hyperdeck; i < nb_flux; i++, hyperdeck_ptr++) {
-				if (drop_list_array_ptr[i] != NULL) {
+			for (i = 0, hyperdeck = first_hyperdeck; i < nb_flux; i++, hyperdeck++) {
+				if (drop_list_ptr_array[i] != NULL) {
 					frame_out[i]->pts += frame_duration[i];
 					avcodec_send_frame (av_codec_context_out[i], frame_out[i]);
 
-					avcodec_receive_packet (av_codec_context_out[i], &packet_out);
-					packet_out.stream_index = 0;
-					packet_out.duration = frame_duration[i];
-					av_interleaved_write_frame (av_format_context_out[i], &packet_out);
+					avcodec_receive_packet (av_codec_context_out[i], packet_out);
+					packet_out->stream_index = 0;
+					packet_out->duration = frame_duration[i];
+					av_interleaved_write_frame (drop_list_ptr_array[i]->av_format_context_out, packet_out);
 				}
 			}
+
 			transcoding_frames[first_hyperdeck->number].frame_count++;
 		}
 	} else g_free (fresque_batch_tmp);
 
-	for (i = 0, hyperdeck_ptr = first_hyperdeck; i < nb_flux; i++, hyperdeck_ptr++) {
-		if (drop_list_array_ptr[i] != NULL) {
-			av_write_trailer (av_format_context_out[i]);
-			drop_list_array_ptr[i]->ffmpeg_buffer_size = avio_close_dyn_buf (av_format_context_out[i]->pb, &drop_list_array_ptr[i]->ffmpeg_buffer);
+	for (i = 0, hyperdeck = first_hyperdeck; i < nb_flux; i++, hyperdeck++) {
+		if (drop_list_ptr_array[i] != NULL) {
+			av_write_trailer (drop_list_ptr_array[i]->av_format_context_out);
 
-g_mutex_lock (&hyperdeck_ptr->drop_mutex);
-			drop_list_array_ptr[i]->next = hyperdeck_ptr->drop_list_file;
-			hyperdeck_ptr->drop_list_file = drop_list_array_ptr[i];
-			if (hyperdeck_ptr->drop_thread == NULL) hyperdeck_ptr->drop_thread = g_thread_new (NULL, (GThreadFunc)drop_to_hyperdeck, hyperdeck_ptr);
-g_mutex_unlock (&hyperdeck_ptr->drop_mutex);
+			drop_list_ptr_array[i]->ffmpeg_buffer_size = avio_close_dyn_buf (drop_list_ptr_array[i]->av_format_context_out->pb, &drop_list_ptr_array[i]->ffmpeg_buffer);
+
+			add_drop_list_to_hyperdeck_transfert_queue (drop_list_ptr_array[i], hyperdeck);
 
 			av_frame_unref (frame_out[i]);
 			av_frame_free (&frame_out[i]);
+
 			avcodec_free_context (&av_codec_context_out[i]);
-			avformat_free_context (av_format_context_out[i]);
 		}
 	}
 
@@ -432,12 +456,16 @@ g_mutex_unlock (&hyperdeck_ptr->drop_mutex);
 		av_frame_free (&first_frame_in);
 	}
 
+	av_packet_free (&packet_out);
+	av_packet_free (&packet_in);
+
 	for (i = 0; i < NB_OF_TRANSITIONS; i++) {
 		if (transitions[i].thread[first_hyperdeck->number] != NULL) {
 			g_thread_join (transitions[i].thread[first_hyperdeck->number]);
 			transitions[i].thread[first_hyperdeck->number] = NULL;
 		}
 	}
-DEBUG_S("split_and_encode_fresque END")
+
+	LOG_STRING("split_and_encode_fresque () return")
 }
 

@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,11 +17,18 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "HyperDeck_Protocol.h"
+
+#include "File.h"
+#include "Fresque.h"
+#include "HyperDeck_Codec.h"
+#include "Logging.h"
+#include "Misc.h"
+#include "Pixbufs.h"
+#include "Preset.h"
+
 #include <string.h>
 #include <stdio.h>
-
-#include "HyperDeck.h"
-#include "HyperDeck_Protocol.h"
 
 
 typedef struct {
@@ -31,9 +38,9 @@ typedef struct {
 } response_t;
 
 
-char* msg_play_single_loop[4] = {msg_play_single_clip_true_loop_true, msg_play_single_clip_true_loop_false, \
-				msg_play_single_clip_false_loop_false, msg_play_single_clip_false_loop_true};
-int msg_play_single_loop_len[4] = {35, 36, 37, 36};
+char* msg_play_single_loop[4] = { msg_play_single_clip_true_loop_true, msg_play_single_clip_true_loop_false, \
+				msg_play_single_clip_false_loop_false, msg_play_single_clip_false_loop_true };
+int msg_play_single_loop_len[4] = { 35, 36, 37, 36 };
 
 
 void next_line (hyperdeck_t *hyperdeck)
@@ -57,7 +64,9 @@ void clean_hyperdeck (hyperdeck_t *hyperdeck)
 	while (hyperdeck->list_of_clips != NULL) {
 		clip_list_tmp = hyperdeck->list_of_clips;
 		hyperdeck->list_of_clips = clip_list_tmp->next;
+
 		gtk_container_remove (GTK_CONTAINER (hyperdeck->list_box), clip_list_tmp->list_box_row);
+
 		g_free (clip_list_tmp);
 	}
 }
@@ -77,33 +86,41 @@ void set_hyperdeck_button_insensitive (hyperdeck_t *hyperdeck)
 gboolean response_timeline_empty (hyperdeck_t *hyperdeck)								//107 timeline empty
 {
 	set_hyperdeck_button_insensitive (hyperdeck);
+
 	clean_hyperdeck (hyperdeck);
+
 	clean_fresques ();
 
 	if (hyperdeck->timeline_empty_retry < 3) {
 		g_timeout_add (REFRESH_WAITING_TIME, (GSourceFunc)refresh_hyperdeck_list_of_clips, hyperdeck);
+
 		hyperdeck->timeline_empty_retry++;
 	} else hyperdeck->timeline_empty_retry = 0;
 
-g_mutex_unlock (&hyperdeck->connection_mutex);
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
 gboolean response_remote_control_disabled (hyperdeck_t *hyperdeck)						//111 remote control disabled
 {
 	gtk_widget_set_opacity (hyperdeck->root_widget, 0.75);
+
 	show_message_window (((response_t *)(hyperdeck->response))->text);
 
-g_mutex_unlock (&hyperdeck->connection_mutex);
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
 gboolean response_connection_rejected (hyperdeck_t *hyperdeck)							//120 connection rejected
 {
 	show_message_window (((response_t *)(hyperdeck->response))->text);
+
 	hyperdeck->connected = FALSE;
 
-g_mutex_unlock (&hyperdeck->connection_mutex);
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -115,33 +132,38 @@ gboolean response_slot_info (hyperdeck_t *hyperdeck)									//202 slot info:
 	char msg[64];
 	int msg_len;
 
+	LOG_HYPERDECK_STRING (hyperdeck,"response_slot_info ()")
+
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot id: ", 7) == 0) {			//slot id:
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot id: ", 8) == 0) {			//slot id:
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "slot id: %d\n", &slot_id);
-DEBUG_HYPERDECK_S ("slot id:")
-DEBUG_HYPERDECK_D (slot_id)
+
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"slot id = ",slot_id)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 6) == 0) {			//status: {“empty”, “mounting”, “error”, “mounted”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 7) == 0) {			//status: { “empty”, “mounting”, “error”, “mounted” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "status: %s\n", status);
-DEBUG_HYPERDECK_S ("status:")
-DEBUG_HYPERDECK_S (status)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"status = ",status)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "volume name: ", 11) == 0) {		//volume name:
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "volume name: ", 12) == 0) {		//volume name:
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "recording time: ", 14) == 0) {	//recording time:
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "recording time: ", 15) == 0) {	//recording time:
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video format: ", 12) == 0) {	//video format: {"PAL", "NTSC", "none"}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video format: ", 13) == 0) {	//video format: { "PAL", "NTSC", "none" }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "video format: %s\n", slot_video_format);
-DEBUG_HYPERDECK_S ("video format:")
-DEBUG_HYPERDECK_S (slot_video_format)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"video format = ",slot_video_format)
+
 			continue;
 		}
 	}
@@ -150,57 +172,75 @@ DEBUG_HYPERDECK_S (slot_video_format)
 		if (slot_id == 1) {
 			hyperdeck->slot_1_is_mounted = TRUE;
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1), pixbuf_S1F);
+
 			if (hyperdeck->slot_selected == 1) {
 				if (strcmp (slot_video_format, video_format) != 0) {
 					msg_len = sprintf (msg, msg_slot_select_video_format_, video_format);
+
 					send (hyperdeck->socket, msg, msg_len, 0);
+
 					SLEEP (1)
 				}
+
 				SEND (hyperdeck, msg_clips_get)
 				SEND (hyperdeck, msg_transport_info)
 			}
+
 			SEND (hyperdeck, msg_disk_list_slot_id_1)
 		}
+
 		if (slot_id == 2) {
 			hyperdeck->slot_2_is_mounted = TRUE;
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2), pixbuf_S2F);
+
 			if (hyperdeck->slot_selected == 2) {
 				if (strcmp (slot_video_format, video_format) != 0) {
 					msg_len = sprintf (msg, msg_slot_select_video_format_, video_format);
+
 					send (hyperdeck->socket, msg, msg_len, 0);
+
 					SLEEP (1)
 				}
+
 				SEND (hyperdeck, msg_clips_get)
 				SEND (hyperdeck, msg_transport_info)
 			}
+
 			SEND (hyperdeck, msg_disk_list_slot_id_2)
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
 gboolean response_device_info (hyperdeck_t *hyperdeck)									//204 device info:
 {
+	LOG_HYPERDECK_STRING (hyperdeck,"response_device_info ()")
+
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "model: ", 5) == 0) {			//model: {Model Name}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "model: ", 5) == 0) {			//model: { Model Name }
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "protocol version: ", 7) == 0) {	//protocol version: HYPERDECK_PROTOCOL_VERSION
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "protocol version: ", 17) == 0) {	//protocol version: HYPERDECK_PROTOCOL_VERSION
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "protocol version: %s\n", hyperdeck->protocol_version);
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "unique id: ", 9) == 0) {		//unique id: {unique alphanumeric identifier}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "unique id: ", 10) == 0) {		//unique id: { unique alphanumeric identifier }
 			continue;
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -214,8 +254,8 @@ void add_clip_to_hyperdeck (clip_list_t *clip, hyperdeck_t *hyperdeck)
 
 	clip->next = hyperdeck->list_of_clips;
 	hyperdeck->list_of_clips = clip;
-DEBUG_HYPERDECK_S ("clip_name")
-DEBUG_HYPERDECK_S (hyperdeck->list_of_clips->name)
+
+	LOG_HYPERDECK_2_STRINGS (hyperdeck,"clip_name = ",hyperdeck->list_of_clips->name)
 
 	clip->list_box_row = gtk_list_box_row_new ();
 	gtk_container_add (GTK_CONTAINER (hyperdeck->list_box), clip->list_box_row);
@@ -241,8 +281,8 @@ DEBUG_HYPERDECK_S (hyperdeck->list_of_clips->name)
 
 		if (fresque_tmp != NULL) {
 			fresque_tmp->clips_id[hyperdeck->number] = clip->id;
-DEBUG_HYPERDECK_S ("fresque_name")
-DEBUG_HYPERDECK_S (fresque_tmp->name)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"fresque_name = ",fresque_tmp->name)
 		} else {
 			fresque_tmp = g_malloc (sizeof (fresque_t));
 			memset (fresque_tmp->clips_id, 0, sizeof (int) * NB_OF_HYPERDECKS);
@@ -257,24 +297,34 @@ DEBUG_HYPERDECK_S (fresque_tmp->name)
 			gtk_container_add (GTK_CONTAINER (list_box_row_event_box), list_box_row_label);
 			gtk_container_add (GTK_CONTAINER (fresque_tmp->list_box_row), list_box_row_event_box);
 
-g_mutex_lock (&fresque_batch_mutex);
-DEBUG_HYPERDECK_S ("fresque_batch")
+			g_mutex_lock (&fresque_batch_mutex);
+
+			LOG_HYPERDECK_STRING (hyperdeck,"fresque_batch")
+
 			for (fresque_batch_tmp = fresque_batches; fresque_batch_tmp != NULL; fresque_batch_tmp = fresque_batch_tmp->next) {
-DEBUG_HYPERDECK_S (fresque_batch_tmp->name)
-DEBUG_HYPERDECK_S (name)
-DEBUG_HYPERDECK_D (name_len)
+				LOG_HYPERDECK_STRING (hyperdeck,fresque_batch_tmp->name)
+				LOG_HYPERDECK_STRING (hyperdeck,name)
+				LOG_HYPERDECK_INT (hyperdeck,name_len)
+
 				if (memcmp (fresque_batch_tmp->name, name, strlen (fresque_batch_tmp->name)) == 0) {
 					if (fresque_batch_tmp->initialized == FALSE) initialize_fresque_batch (fresque_batch_tmp);
-DEBUG_HYPERDECK_S ("trouvé")
+
+					LOG_HYPERDECK_STRING (hyperdeck,"found")
+
 					gtk_container_add (GTK_CONTAINER (fresque_batch_tmp->list_box), fresque_tmp->list_box_row);
+
 					fresque_batch_tmp->nb_fresques++;
 					fresque_tmp->parent_fresque_batch = fresque_batch_tmp;
+
 					break;
 				}
 			}
-g_mutex_unlock (&fresque_batch_mutex);
+
+			g_mutex_unlock (&fresque_batch_mutex);
+
 			if (fresque_batch_tmp == NULL) {
 				gtk_container_add (GTK_CONTAINER (fresques_list_box), fresque_tmp->list_box_row);
+
 				fresques_list_box_num++;
 				fresque_tmp->parent_fresque_batch = NULL;
 			}
@@ -284,8 +334,7 @@ g_mutex_unlock (&fresque_batch_mutex);
 			fresque_tmp->next = fresques;
 			fresques = fresque_tmp;
 
-DEBUG_HYPERDECK_S ("nouvelle fresque:")
-DEBUG_HYPERDECK_S (fresques->name)
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"nouvelle fresque = ",fresques->name)
 		}
 	}
 }
@@ -295,29 +344,37 @@ void response_clips_info_suite (hyperdeck_t *hyperdeck, int *clip_count)
 	int i;
 	clip_list_t *clip_list_tmp;
 
-DEBUG_HYPERDECK_S ("\nresponse_clips_info_suite")
+	LOG_HYPERDECK_STRING (hyperdeck,"response_clips_info_suite ()")
+
 	hyperdeck->recv_len = recv (hyperdeck->socket, hyperdeck->buffer, sizeof (hyperdeck->buffer), 0);
 
 	if (hyperdeck->recv_len <= 0) {
 		hyperdeck->connected = FALSE;
 		hyperdeck->clip_count = *clip_count;
-DEBUG_HYPERDECK_S ("recv_len <= 0")
+
+		LOG_HYPERDECK_STRING (hyperdeck,"recv_len <= 0")
+
 		return;
 	}
-hyperdeck->buffer[hyperdeck->recv_len] = '\0';
-DEBUG_HYPERDECK_S ("[buffer]")
-DEBUG_HYPERDECK_S (hyperdeck->buffer)
+
+	hyperdeck->buffer[hyperdeck->recv_len] = '\0';
+	LOG_HYPERDECK_STRING (hyperdeck,"[buffer]")
+	LOG_HYPERDECK_STRING (hyperdeck,hyperdeck->buffer)
 
 	hyperdeck->index = 0;
 	while ((hyperdeck->buffer[hyperdeck->index] != '\r') && (hyperdeck->index < hyperdeck->recv_len - 3)) {
 		clip_list_tmp = g_malloc (sizeof (clip_list_t));
+
 		sscanf (&hyperdeck->buffer[hyperdeck->index], "%d", &clip_list_tmp->id);
-DEBUG_HYPERDECK_S ("clip_id")
-DEBUG_HYPERDECK_D (clip_list_tmp->id)
+
+		LOG_HYPERDECK_STRING_INT (hyperdeck,"clip_id = ",clip_list_tmp->id)
+
 		while (hyperdeck->buffer[hyperdeck->index] != ' ') hyperdeck->index++;
 		hyperdeck->index++;
+
 		i = hyperdeck->index;
 		while (hyperdeck->buffer[i] != '\n') i++;
+
 		hyperdeck->buffer[i - 29] = '\0';
 		strcpy (clip_list_tmp->name, &hyperdeck->buffer[hyperdeck->index]);
 		hyperdeck->index = i + 1;
@@ -326,7 +383,8 @@ DEBUG_HYPERDECK_D (clip_list_tmp->id)
 
 		*clip_count = *clip_count + 1;
 	}
-DEBUG_HYPERDECK_S ("response_clips_info_suite end")
+
+	LOG_HYPERDECK_STRING (hyperdeck,"response_clips_info_suite () return")
 }
 
 gboolean response_clips_info (hyperdeck_t *hyperdeck)										//205 clips info:
@@ -340,19 +398,24 @@ gboolean response_clips_info (hyperdeck_t *hyperdeck)										//205 clips info:
 	clip_count = 0;
 
 	sscanf (&hyperdeck->buffer[hyperdeck->index], "clip count: %d\n", &hyperdeck->clip_count);	//clip count:
-DEBUG_HYPERDECK_S ("clip count:")
-DEBUG_HYPERDECK_D (hyperdeck->clip_count)
+
+	LOG_HYPERDECK_STRING_INT (hyperdeck,"clip count = ",hyperdeck->clip_count)
+
 	next_line (hyperdeck);
 
 	while ((hyperdeck->buffer[hyperdeck->index] != '\r') && (hyperdeck->index < hyperdeck->recv_len - 3)) {
 		clip_list_tmp = g_malloc (sizeof (clip_list_t));
+
 		sscanf (&hyperdeck->buffer[hyperdeck->index], "%d", &clip_list_tmp->id);
-DEBUG_HYPERDECK_S ("clip_id")
-DEBUG_HYPERDECK_D (clip_list_tmp->id)
+
+		LOG_HYPERDECK_STRING_INT (hyperdeck,"clip_id = ",clip_list_tmp->id)
+
 		while (hyperdeck->buffer[hyperdeck->index] != ' ') hyperdeck->index++;
 		hyperdeck->index++;
+
 		i = hyperdeck->index;
 		while (hyperdeck->buffer[i] != '\n') i++;
+
 		hyperdeck->buffer[i - 29] = '\0';
 		strcpy (clip_list_tmp->name, &hyperdeck->buffer[hyperdeck->index]);
 		hyperdeck->index = i + 1;
@@ -390,7 +453,8 @@ DEBUG_HYPERDECK_D (clip_list_tmp->id)
 		}
 	}
 
-g_mutex_lock (&hyperdeck->last_file_dropped_mutex);
+	g_mutex_lock (&hyperdeck->last_file_dropped_mutex);
+
 	if ((clip_list_tmp != NULL) && (hyperdeck->last_file_dropped != NULL)) {
 		for (clip_list_tmp = hyperdeck->list_of_clips; clip_list_tmp != NULL; clip_list_tmp = clip_list_tmp->next) {
 			if (strcmp (hyperdeck->last_file_dropped, clip_list_tmp->name) == 0) break;
@@ -400,10 +464,13 @@ g_mutex_lock (&hyperdeck->last_file_dropped_mutex);
 		g_free (hyperdeck->last_file_dropped);
 		hyperdeck->last_file_dropped = NULL;
 	}
-g_mutex_unlock (&hyperdeck->last_file_dropped_mutex);
+
+	g_mutex_unlock (&hyperdeck->last_file_dropped_mutex);
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -416,19 +483,25 @@ void response_disk_list_suite (hyperdeck_t *hyperdeck)
 		while ((hyperdeck->buffer[hyperdeck->index] != '\r') && (hyperdeck->index < hyperdeck->recv_len - 3)) {
 			while (hyperdeck->buffer[hyperdeck->index] != ' ') hyperdeck->index++;
 			hyperdeck->index++;
+
 			for (k = hyperdeck->index; hyperdeck->buffer[k] != '\n'; k++) {}
+
 			for (l = 0; l < 3; l++) {
 				while (hyperdeck->buffer[k] != ' ') k--;
 				k--;
 			}
 			k -= 3;
 			hyperdeck->buffer[k] = '\0';
+
 			disk_list_tmp = g_malloc (sizeof (clip_list_t));
+
 			strcpy (disk_list_tmp->name, &hyperdeck->buffer[hyperdeck->index]);
+
 			disk_list_tmp->next = hyperdeck->slot_1_disk_list;
 			hyperdeck->slot_1_disk_list = disk_list_tmp;
-DEBUG_HYPERDECK_S ("disk_clip_name")
-DEBUG_HYPERDECK_S (hyperdeck->slot_1_disk_list->name)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"disk_clip_name = ",hyperdeck->slot_1_disk_list->name)
+
 			hyperdeck->index = k;
 			next_line (hyperdeck);
 		}
@@ -436,19 +509,25 @@ DEBUG_HYPERDECK_S (hyperdeck->slot_1_disk_list->name)
 		while ((hyperdeck->buffer[hyperdeck->index] != '\r') && (hyperdeck->index < hyperdeck->recv_len - 3)) {
 			while (hyperdeck->buffer[hyperdeck->index] != ' ') hyperdeck->index++;
 			hyperdeck->index++;
+
 			for (k = hyperdeck->index; hyperdeck->buffer[k] != '\n'; k++) {}
+
 			for (l = 0; l < 3; l++) {
 				while (hyperdeck->buffer[k] != ' ') k--;
 				k--;
 			}
 			k -= 3;
 			hyperdeck->buffer[k] = '\0';
+
 			disk_list_tmp = g_malloc (sizeof (clip_list_t));
+
 			strcpy (disk_list_tmp->name, &hyperdeck->buffer[hyperdeck->index]);
+
 			disk_list_tmp->next = hyperdeck->slot_2_disk_list;
 			hyperdeck->slot_2_disk_list = disk_list_tmp;
-DEBUG_HYPERDECK_S ("disk_clip_name")
-DEBUG_HYPERDECK_S (hyperdeck->slot_2_disk_list->name)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"disk_clip_name = ",hyperdeck->slot_2_disk_list->name)
+
 			hyperdeck->index = k;
 			next_line (hyperdeck);
 		}
@@ -463,69 +542,90 @@ gboolean response_disk_list (hyperdeck_t *hyperdeck)									//206 disk list:
 	int slot_id;
 	disk_list_t *disk_list_tmp;
 
+	LOG_HYPERDECK_STRING (hyperdeck,"response_disk_list ()")
+
 	sscanf (&hyperdeck->buffer[hyperdeck->index], "slot id: %d\n", &slot_id);				//slot id:
-DEBUG_HYPERDECK_S ("slot id:")
-DEBUG_HYPERDECK_D (slot_id)
+
+	LOG_HYPERDECK_STRING_INT (hyperdeck,"slot id = ",slot_id)
+
 	next_line (hyperdeck);
 
 	if (slot_id == 1) {
 		hyperdeck->disk_slot_id = 1;
+
 		while (hyperdeck->slot_1_disk_list != NULL) {
 			disk_list_tmp = hyperdeck->slot_1_disk_list;
 			hyperdeck->slot_1_disk_list = disk_list_tmp->next;
+
 			g_free (disk_list_tmp);
 		}
 		
 		while ((hyperdeck->buffer[hyperdeck->index] != '\r') && (hyperdeck->index < hyperdeck->recv_len - 3)) {
 			while (hyperdeck->buffer[hyperdeck->index] != ' ') hyperdeck->index++;
 			hyperdeck->index++;
+
 			for (k = hyperdeck->index; hyperdeck->buffer[k] != '\n'; k++) {}
+
 			for (l = 0; l < 3; l++) {
 				while (hyperdeck->buffer[k] != ' ') k--;
 				k--;
 			}
 			k -= 3;
 			hyperdeck->buffer[k] = '\0';
+
 			disk_list_tmp = g_malloc (sizeof (clip_list_t));
+
 			strcpy (disk_list_tmp->name, &hyperdeck->buffer[hyperdeck->index]);
+
 			disk_list_tmp->next = hyperdeck->slot_1_disk_list;
 			hyperdeck->slot_1_disk_list = disk_list_tmp;
-DEBUG_HYPERDECK_S ("disk_clip_name")
-DEBUG_HYPERDECK_S (hyperdeck->slot_1_disk_list->name)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"disk_clip_name = ",hyperdeck->slot_1_disk_list->name)
+
 			hyperdeck->index = k;
 			next_line (hyperdeck);
 		}
 	} else if (slot_id == 2) {
 		hyperdeck->disk_slot_id = 2;
+
 		while (hyperdeck->slot_2_disk_list != NULL) {
 			disk_list_tmp = hyperdeck->slot_2_disk_list;
 			hyperdeck->slot_2_disk_list = disk_list_tmp->next;
+
 			g_free (disk_list_tmp);
 		}
 		
 		while ((hyperdeck->buffer[hyperdeck->index] != '\r') && (hyperdeck->index < hyperdeck->recv_len - 3)) {
 			while (hyperdeck->buffer[hyperdeck->index] != ' ') hyperdeck->index++;
 			hyperdeck->index++;
+
 			for (k = hyperdeck->index; hyperdeck->buffer[k] != '\n'; k++) {}
+
 			for (l = 0; l < 3; l++) {
 				while (hyperdeck->buffer[k] != ' ') k--;
 				k--;
 			}
 			k -= 3;
 			hyperdeck->buffer[k] = '\0';
+
 			disk_list_tmp = g_malloc (sizeof (clip_list_t));
+
 			strcpy (disk_list_tmp->name, &hyperdeck->buffer[hyperdeck->index]);
+
 			disk_list_tmp->next = hyperdeck->slot_2_disk_list;
 			hyperdeck->slot_2_disk_list = disk_list_tmp;
-DEBUG_HYPERDECK_S ("disk_clip_name")
-DEBUG_HYPERDECK_S (hyperdeck->slot_2_disk_list->name)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"disk_clip_name = ",hyperdeck->slot_2_disk_list->name)
+
 			hyperdeck->index = k;
 			next_line (hyperdeck);
 		}
 	} else hyperdeck->disk_slot_id = 0;
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -538,52 +638,60 @@ gboolean response_transport_info (hyperdeck_t *hyperdeck)								//208 transport
 	char msg[32];
 	int msg_len;
 
+	LOG_HYPERDECK_STRING (hyperdeck,"response_transport_info ()")
+
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 6) == 0) {			//status: {“stopped”, “play”, ...}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 7) == 0) {			//status: { “stopped”, “play”, ... }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "status: %s\n", text);
-DEBUG_HYPERDECK_S ("status: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"status = ",text)
+
 			if (strcmp (text, "play") == 0) {
 				play = TRUE;
 				preview = FALSE;
 			} else {
 				play = FALSE;
+
 				if (strcmp (text, "preview") == 0) preview = TRUE;
 				else preview = FALSE;
 			}
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "speed: ", 5) == 0) {
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "speed: ", 6) == 0) {
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot id: ", 7) == 0) {			//slot id: {slot id or none}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot id: ", 8) == 0) {			//slot id: { slot id or none }
 			if (sscanf (&hyperdeck->buffer[hyperdeck->index], "slot id: %d\n", &slot_id) != 1) slot_id = 0;
-DEBUG_HYPERDECK_S ("slot id: ")
-DEBUG_HYPERDECK_D (slot_id)
+
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"slot id = ",slot_id)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "display timecode: ", 16) == 0) {
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "display timecode: ", 17) == 0) {
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "timecode: ", 8) == 0) {
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "timecode: ", 9) == 0) {
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "clip id: ", 7) == 0) {			//clip id: {clip id or none}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "clip id: ", 8) == 0) {			//clip id: { clip id or none }
 			if (sscanf (&hyperdeck->buffer[hyperdeck->index], "clip id: %d\n", &clip_id) == 1) {
-DEBUG_HYPERDECK_S ("clip id: ")
-DEBUG_HYPERDECK_D (clip_id)
+				LOG_HYPERDECK_STRING_INT (hyperdeck,"clip id = ",clip_id)
+
 				for (clip_list_tmp = hyperdeck->list_of_clips; clip_list_tmp != NULL; clip_list_tmp = clip_list_tmp->next) {
 					if (clip_id == clip_list_tmp->id) {
 						gtk_list_box_select_row (GTK_LIST_BOX (hyperdeck->list_box), GTK_LIST_BOX_ROW (clip_list_tmp->list_box_row));
+
 						break;
 					}
 				}
 			} else clip_id = 0;
+
 			continue;
 		}
 
@@ -628,29 +736,35 @@ DEBUG_HYPERDECK_D (clip_id)
 				hyperdeck->video_format.label = "UHD 4K";
 			}
 DEBUG_HYPERDECK_S ("video format: ")
-DEBUG_HYPERDECK_D (hyperdeck->video_format.nb_lines)
-DEBUG_HYPERDECK_D ((int)hyperdeck->video_format.progressif)
+LOG_HYPERDECK_INT (hyperdeck,hyperdeck->video_format.nb_lines)
+LOG_HYPERDECK_INT (hyperdeck,(int)hyperdeck->video_format.progressif)
 DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "loop: ", 4) == 0) {			//loop: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "loop: ", 5) == 0) {			//loop: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "loop: %s\n", text);
+
 			if (strcmp (text, "true") == 0) loop = TRUE;
 			else loop = FALSE;
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "single clip: ", 11) == 0) {		//single clip: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "single clip: ", 12) == 0) {		//single clip: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "single clip: %s\n", text);
+
 			if (strcmp (text, "true") == 0) single_clip = TRUE;
 			else single_clip = FALSE;
+
 			continue;
 		}
 	}
 
 	if (hyperdeck->slot_selected != slot_id) {
 		hyperdeck->slot_selected = slot_id;
+
 		if (slot_id == 1) {
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2_indicator), pixbuf_S2NS);
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1_indicator), pixbuf_S1S);
@@ -673,6 +787,7 @@ DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 
 	if (hyperdeck->play != play) {
 		hyperdeck->play = play;
+
 		if (play) gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_play_button), pixbuf_BPOn);
 		else gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_play_button), pixbuf_BPOff);
 	}
@@ -687,12 +802,15 @@ DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 
 	if (hyperdeck->loop != hyperdeck_loop) {
 		hyperdeck->loop = hyperdeck_loop;
+
 		gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_single_loop_button), pixbuf_loop[hyperdeck_loop]);
 	}
 
 	if ((play == FALSE) && (clip_id == 1)) {
 		msg_len = sprintf (msg, "%s%d\n", msg_goto_clip_id_, clip_id);
-DEBUG_HYPERDECK_S (msg)
+
+		LOG_HYPERDECK_STRING (hyperdeck,msg)
+
 		send (hyperdeck->socket, msg, msg_len, 0);
 	}
 
@@ -701,7 +819,9 @@ DEBUG_HYPERDECK_S (msg)
 	if (preview) send (hyperdeck->socket, msg_preview_enable_false, 22, 0);
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -710,49 +830,61 @@ gboolean response_notify (hyperdeck_t *hyperdeck)										//209 notify:
 	char text[8];
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "transport: ", 9) == 0) {		//transport: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "transport: ", 10) == 0) {		//transport: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "transport: %s\n", text);
-DEBUG_HYPERDECK_S ("transport: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"transport = ",text)
+
 //			if (strcmp (text, "true") == 0) {}
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot: ", 4) == 0) {			//slot: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot: ", 5) == 0) {				//slot: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "slot: %s\n", text);
-DEBUG_HYPERDECK_S ("slot: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"slot = ",text)
+
 //			if (strcmp (text, "true") == 0) {}
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "remote: ", 6) == 0) {			//remote: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "remote: ", 7) == 0) {			//remote: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "remote: %s\n", text);
-DEBUG_HYPERDECK_S ("remote: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"remote = ",text)
+
 //			if (strcmp (text, "true") == 0) {}
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "configuration: ", 13) == 0) {	//configuration: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "configuration: ", 14) == 0) {	//configuration: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "configuration: %s\n", text);
-DEBUG_HYPERDECK_S ("configuration: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"configuration = ",text)
+
 //			if (strcmp (text, "true") == 0) {}
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "dropped frames: ", 14) == 0) {	//dropped frames: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "dropped frames: ", 15) == 0) {	//dropped frames: {“true”, “false”}
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "dropped frames: %s\n", text);
-DEBUG_HYPERDECK_S ("dropped frames: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"dropped frames = ",text)
+
 //			if (strcmp (text, "true") == 0) {}
+
 			continue;
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -762,29 +894,35 @@ gboolean response_configuration (hyperdeck_t *hyperdeck)								//211 configurat
 	int msg_len;
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "audio input: ", 11) == 0) {		//audio input: {“embedded”, “XLR”, “RCA”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "audio input: ", 12) == 0) {		//audio input: { “embedded”, “XLR”, “RCA” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "audio input: %s\n", msg);
-DEBUG_HYPERDECK_S ("audio input: ")
-DEBUG_HYPERDECK_S (msg)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"audio input = ",msg)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video input: ", 11) == 0) {		//video input: {“SDI”, “HDMI”, “component”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video input: ", 12) == 0) {		//video input: { “SDI”, “HDMI”, “component” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "video input: %s\n", msg);
-DEBUG_HYPERDECK_S ("video input: ")
-DEBUG_HYPERDECK_S (msg)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"video input = ",msg)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "file format: ", 11) == 0) {		//file format: {QuickTimeProResHQ, QuickTimeProRes, QuickTimeProResLT, QuickTimeProResProxy, QuickTimeDNxHD220, QuickTimeDNxHR_HQX, ... DNxHD220}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "file format: ", 12) == 0) {		//file format: { QuickTimeProResHQ, QuickTimeProRes, QuickTimeProResLT, QuickTimeProResProxy, QuickTimeDNxHD220, QuickTimeDNxHR_HQX, ... DNxHD220 }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "file format: %s\n", msg);
-DEBUG_HYPERDECK_S ("file format: ")
-DEBUG_HYPERDECK_S (msg)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"file format = ",msg)
+
 			if (strcmp (msg, file_format) != 0) {
 				msg_len = sprintf (msg, msg_configuration_file_format_, file_format);
+
 				send (hyperdeck->socket, msg, msg_len, 0);
+
 				SLEEP(1)
 			}
+
 			continue;
 		}
 	}
@@ -798,17 +936,21 @@ DEBUG_HYPERDECK_S (msg)
 	SEND (hyperdeck, msg_notify_remote_true)
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
 gboolean response_deck_rebooting (hyperdeck_t *hyperdeck)								//213 deck rebooting
 {
 	show_message_window (((response_t *)(hyperdeck->response))->text);
+
 	hyperdeck->reboot = TRUE;
 	hyperdeck->connected = FALSE;
 
-g_mutex_unlock (&hyperdeck->connection_mutex);
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -818,7 +960,9 @@ gboolean response_uptime (hyperdeck_t *hyperdeck)										//215 uptime:
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -827,22 +971,28 @@ gboolean response_asynchronous_connection_info (hyperdeck_t *hyperdeck)					//50
 	char msg[128];
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "model: ", 5) == 0) {			//model: Blackmagic HyperDeck Studio Mini
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "model: ", 6) == 0) {			//model: Blackmagic HyperDeck Studio Mini
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "protocol version: ", 7) == 0) {	//protocol version: HYPERDECK_PROTOCOL_VERSION
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "protocol version: ", 17) == 0) {	//protocol version: HYPERDECK_PROTOCOL_VERSION
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "protocol version: %s\n", hyperdeck->protocol_version);
+
 			if (strcmp (hyperdeck->protocol_version, HYPERDECK_PROTOCOL_VERSION) != 0) {
 				sprintf (msg, "Hyperdeck n°%d protocol version: %s\nSoftware protocol version: %s", hyperdeck->number + 1, hyperdeck->protocol_version, HYPERDECK_PROTOCOL_VERSION);
+
 				show_message_window (msg);
 			}
+
 			continue;
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -853,29 +1003,31 @@ gboolean response_asynchronous_slot_info (hyperdeck_t *hyperdeck)						//502 slo
 	disk_list_t *disk_list_tmp;
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot id: ", 7) == 0) {			//slot id:
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "slot id: ", 8) == 0) {			//slot id:
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "slot id: %d\n", &slot_id);
-DEBUG_HYPERDECK_S ("slot id:")
-DEBUG_HYPERDECK_D (slot_id)
+
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"slot id = ",slot_id)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 6) == 0) {			//status: {“empty”, “mounting”, “error”, “mounted”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 7) == 0) {			//status: { “empty”, “mounting”, “error”, “mounted” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "status: %s\n", status);
-DEBUG_HYPERDECK_S ("status:")
-DEBUG_HYPERDECK_S (status)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"status = ",status)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "volume name: ", 11) == 0) {		//volume name:
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "volume name: ", 12) == 0) {		//volume name:
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "recording time: ", 14) == 0) {	//recording time:
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "recording time: ", 15) == 0) {	//recording time:
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video format: ", 12) == 0) {	//video format: {"PAL", "NTSC", "none"}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video format: ", 13) == 0) {	//video format: { "PAL", "NTSC", "none" }
 			continue;
 		}
 	}
@@ -883,31 +1035,44 @@ DEBUG_HYPERDECK_S (status)
 	if (strcmp (status, "mounted") == 0) {
 		if (slot_id == 1) {
 			hyperdeck->slot_1_is_mounted = TRUE;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1), pixbuf_S1F);
+
 			if (hyperdeck->slot_selected == 0) {
 				hyperdeck->slot_selected = 1;
+
 				SEND (hyperdeck, msg_clips_get)
 				SEND (hyperdeck, msg_transport_info)
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1_indicator), pixbuf_S1S);
 			}
+
 			SEND (hyperdeck, msg_disk_list_slot_id_1)
 		}
+
 		if (slot_id == 2) {
 			hyperdeck->slot_2_is_mounted = TRUE;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2), pixbuf_S2F);
+
 			if (hyperdeck->slot_selected == 0) {
 				hyperdeck->slot_selected = 2;
+
 				SEND (hyperdeck, msg_clips_get)
 				SEND (hyperdeck, msg_transport_info)
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2_indicator), pixbuf_S2S);
 			}
+
 			SEND (hyperdeck, msg_disk_list_slot_id_2)
 		}
 	} else if (strcmp (status, "mounting") != 0) {
 		if (slot_id == 1) {
 			if (hyperdeck->slot_selected == 1) {
 				hyperdeck->slot_selected = 0;
+
 				set_hyperdeck_button_insensitive (hyperdeck);
+
 				clean_hyperdeck (hyperdeck);
 				clean_fresques ();
 			}
@@ -919,13 +1084,17 @@ DEBUG_HYPERDECK_S (status)
 			while (hyperdeck->slot_1_disk_list != NULL) {
 				disk_list_tmp = hyperdeck->slot_1_disk_list;
 				hyperdeck->slot_1_disk_list = disk_list_tmp->next;
+
 				g_free (disk_list_tmp);
 			}
 		}
+
 		if (slot_id == 2) {
 			if (hyperdeck->slot_selected == 2) {
 				hyperdeck->slot_selected = 0;
+
 				set_hyperdeck_button_insensitive (hyperdeck);
+
 				clean_hyperdeck (hyperdeck);
 				clean_fresques ();
 			}
@@ -937,13 +1106,16 @@ DEBUG_HYPERDECK_S (status)
 			while (hyperdeck->slot_2_disk_list != NULL) {
 				disk_list_tmp = hyperdeck->slot_2_disk_list;
 				hyperdeck->slot_2_disk_list = disk_list_tmp->next;
+
 				g_free (disk_list_tmp);
 			}
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -964,70 +1136,79 @@ gboolean response_asynchronous_transport_info (hyperdeck_t *hyperdeck)					//508
 
 	switch (hyperdeck->loop) {
 		case SINGLE_CLIP_TRUE_LOOP_TRUE: single_clip = TRUE;
-						loop = TRUE;
-						break;
+											loop = TRUE;
+											break;
 		case SINGLE_CLIP_TRUE_LOOP_FALSE: single_clip = TRUE;
-						loop = FALSE;
-						break;
+											loop = FALSE;
+											break;
 		case SINGLE_CLIP_FALSE_LOOP_FALSE: single_clip = FALSE;
-						loop = FALSE;
-						break;
+											loop = FALSE;
+											break;
 		case SINGLE_CLIP_FALSE_LOOP_TRUE: single_clip = FALSE;
-						loop = TRUE;
-						break;
+											loop = TRUE;
+											break;
 	}
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 6) == 0) {			//status: {“stopped”, “play”, ...}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "status: ", 7) == 0) {			//status: { “stopped”, “play”, ... }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "status: %s\n", text);
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_STRING (hyperdeck,text)
+
 			if (strcmp (text, "play") == 0) {
 				play = TRUE;
 				preview = FALSE;
 			} else {
 				play = FALSE;
+
 				if (strcmp (text, "preview") == 0) preview = TRUE;
 				else preview = FALSE;
 			}
+
 			play_has_changed = TRUE;
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "speed: ", 5) == 0) {
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "speed: ", 6) == 0) {
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "active slot: ", 11) == 0) {		//active slot: {slot id or none}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "active slot: ", 12) == 0) {		//active slot: { slot id or none }
 			if (sscanf (&hyperdeck->buffer[hyperdeck->index], "active slot: %d\n", &slot_id) != 1) slot_id = 0;
-DEBUG_HYPERDECK_S ("active slot:")
-DEBUG_HYPERDECK_D (slot_id)
+
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"active slot = ",slot_id)
+
 			slot_has_changed = TRUE;
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "display timecode: ", 16) == 0) {
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "display timecode: ", 17) == 0) {
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "timecode: ", 8) == 0) {
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "timecode: ", 9) == 0) {
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "clip id: ", 7) == 0) {			//clip id: {clip id or none}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "clip id: ", 8) == 0) {			//clip id: { clip id or none }
 			if (sscanf (&hyperdeck->buffer[hyperdeck->index], "clip id: %d\n", &clip_id) == 1) {
-DEBUG_HYPERDECK_S ("clip id: ")
-DEBUG_HYPERDECK_D (clip_id)
+				LOG_HYPERDECK_STRING_INT (hyperdeck,"clip id = ",clip_id)
+
 				for (clip_list_tmp = hyperdeck->list_of_clips; clip_list_tmp != NULL; clip_list_tmp = clip_list_tmp->next) {
 					if (clip_id == clip_list_tmp->id) {
 						gtk_list_box_select_row (GTK_LIST_BOX (hyperdeck->list_box), GTK_LIST_BOX_ROW (clip_list_tmp->list_box_row));
+
 						break;
 					}
 				}
 			}
+
 			continue;
 		}
 
-		if (strncmp (hyperdeck->buffer + hyperdeck->index, "video format: ", 12) == 0) {	//video format: {}
+		if (strncmp (hyperdeck->buffer + hyperdeck->index, "video format: ", 13) == 0) {	//video format: {}
 /*			if (strncmp (hyperdeck->buffer + hyperdeck->index + 14, "PAL", 3) == 0) {
 				hyperdeck->video_format.nb_lines = 576;
 				if (hyperdeck->buffer[hyperdeck->index + 17] == 'p') hyperdeck->video_format.progressif = TRUE;
@@ -1068,25 +1249,32 @@ DEBUG_HYPERDECK_D (clip_id)
 				hyperdeck->video_format.label = "UHD 4K";
 			}
 DEBUG_HYPERDECK_S ("video format: ")
-DEBUG_HYPERDECK_D (hyperdeck->video_format.nb_lines)
-DEBUG_HYPERDECK_D ((int)hyperdeck->video_format.progressif)
+LOG_HYPERDECK_INT (hyperdeck,hyperdeck->video_format.nb_lines)
+LOG_HYPERDECK_INT (hyperdeck,(int)hyperdeck->video_format.progressif)
 DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "loop: ", 4) == 0) {			//loop: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "loop: ", 5) == 0) {			//loop: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "loop: %s\n", text);
+
 			if (strcmp (text, "true") == 0) loop = TRUE;
 			else loop = FALSE;
+
 			single_clip_loop_has_changed = TRUE;
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "single clip: ", 11) == 0) {		//single clip: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "single clip: ", 12) == 0) {		//single clip: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "single clip: %s\n", text);
+
 			if (strcmp (text, "true") == 0) single_clip = TRUE;
 			else single_clip = FALSE;
+
 			single_clip_loop_has_changed = TRUE;
+
 			continue;
 		}
 	}
@@ -1095,23 +1283,31 @@ DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 		if (slot_id == 1) {
 			if (hyperdeck->slot_1_is_mounted) {
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2_indicator), pixbuf_S2NS);
+
 				hyperdeck->slot_selected = 1;
+
 				SEND (hyperdeck, msg_clips_get)
 				SEND (hyperdeck, msg_transport_info)
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1_indicator), pixbuf_S1S);
 			}
 		} else if (slot_id == 2) {
 			if (hyperdeck->slot_2_is_mounted) {
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1_indicator), pixbuf_S1NS);
+
 				hyperdeck->slot_selected = 2;
+
 				SEND (hyperdeck, msg_clips_get)
 				SEND (hyperdeck, msg_transport_info)
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2_indicator), pixbuf_S2S);
 			}
 		} else {
 			hyperdeck->slot_selected = 0;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1_indicator), pixbuf_S1NS);
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2_indicator), pixbuf_S2NS);
+
 			gtk_widget_set_sensitive (hyperdeck->play_button, FALSE);
 			gtk_widget_set_opacity (hyperdeck->play_button, 0.75);
 			gtk_widget_set_sensitive (hyperdeck->stop_button, FALSE);
@@ -1126,15 +1322,18 @@ DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 	if (play_has_changed) {
 		if (play) {
 			hyperdeck->play = TRUE;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_play_button), pixbuf_BPOn);
 		} else {
 			hyperdeck->play = FALSE;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_play_button), pixbuf_BPOff);
 
 			if (preview) {
-DEBUG_S("PREVIEW TRUE --> E to E")
-//send (hyperdeck->socket, msg_preview_enable_false, 22, 0);
-}
+				LOG_HYPERDECK_STRING (hyperdeck,"PREVIEW TRUE --> E to E")
+
+//				send (hyperdeck->socket, msg_preview_enable_false, 22, 0);
+			}
 		}
 	}
 
@@ -1162,12 +1361,16 @@ DEBUG_S("PREVIEW TRUE --> E to E")
 
 	if ((slot_has_changed == FALSE) && (play_has_changed == FALSE) && (single_clip_loop_has_changed == FALSE) && (clip_id != 0) && (hyperdeck->play == FALSE)) {
 		msg_len = sprintf (msg, "%s%d\n", msg_goto_clip_id_, clip_id);
-DEBUG_HYPERDECK_S (msg)
+
+		LOG_HYPERDECK_STRING (hyperdeck,msg)
+
 		send (hyperdeck->socket, msg, msg_len, 0);
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -1176,8 +1379,9 @@ gboolean response_asynchronous_remote_info (hyperdeck_t *hyperdeck)						//510 r
 	char text[8];
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "enabled: ", 7) == 0) {			//enabled: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "enabled: ", 8) == 0) {			//enabled: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "enabled: %s\n", text);
+
 			if (strcmp (text, "true") == 0) {
 				if (hyperdeck->clip_count == 0) {
 					gtk_widget_set_sensitive (hyperdeck->play_button, FALSE);
@@ -1189,8 +1393,10 @@ gboolean response_asynchronous_remote_info (hyperdeck_t *hyperdeck)						//510 r
 					gtk_widget_set_sensitive (hyperdeck->del_button, FALSE);
 					gtk_widget_set_opacity (hyperdeck->del_button, 0.75);
 				}
+
 				gtk_widget_set_sensitive (hyperdeck->root_widget, TRUE);
 			}
+
 			if (strcmp (text, "false") == 0) {
 				gtk_widget_set_sensitive (hyperdeck->play_button, TRUE);
 				gtk_widget_set_opacity (hyperdeck->play_button, 1.0);
@@ -1201,54 +1407,70 @@ gboolean response_asynchronous_remote_info (hyperdeck_t *hyperdeck)						//510 r
 				gtk_widget_set_sensitive (hyperdeck->del_button, TRUE);
 				gtk_widget_set_opacity (hyperdeck->del_button, 1.0);
 				gtk_widget_set_sensitive (hyperdeck->root_widget, FALSE);
+
 				show_message_window (((response_t *)(hyperdeck->response))->text);
 			}
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "override: ", 8) == 0) {		//override: {“true”, “false”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "override: ", 9) == 0) {			//override: { “true”, “false” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "override: %s\n", text);
-DEBUG_HYPERDECK_S ("override: ")
-DEBUG_HYPERDECK_S (text)
+
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"override = ",text)
+
 //			if (strcmp (text, "true") == 0) {}
+
 			continue;
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
-gboolean response_asynchronous_configuration (hyperdeck_t *hyperdeck)						//511 configuration:
+gboolean response_asynchronous_configuration (hyperdeck_t *hyperdeck)					//511 configuration:
 {
-	char msg[64];
+	char msg[80];
 	char hyperdeck_file_format[32];
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "audio input: ", 11) == 0) {		//audio input: {“embedded”, “XLR”, “RCA”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "audio input: ", 12) == 0) {		//audio input: { “embedded”, “XLR”, “RCA” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "audio input: %s\n", msg);
-DEBUG_HYPERDECK_S (msg)
+
+			LOG_HYPERDECK_STRING (hyperdeck,msg)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video input: ", 11) == 0) {		//video input: {“SDI”, “HDMI”, “component”}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "video input: ", 12) == 0) {		//video input: { “SDI”, “HDMI”, “component” }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "video input: %s\n", msg);
-DEBUG_HYPERDECK_S (msg)
+
+			LOG_HYPERDECK_STRING (hyperdeck,msg)
+
 			continue;
 		}
 
-		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "file format: ", 11) == 0) {		//file format: {QuickTimeProResHQ, QuickTimeProRes, QuickTimeProResLT, QuickTimeProResProxy, QuickTimeDNxHD220, QuickTimeDNxHR_HQX, ... DNxHD220}
+		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "file format: ", 12) == 0) {		//file format: { QuickTimeProResHQ, QuickTimeProRes, QuickTimeProResLT, QuickTimeProResProxy, QuickTimeDNxHD220, QuickTimeDNxHR_HQX, ... DNxHD220 }
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "file format: %s\n", hyperdeck_file_format);
-DEBUG_HYPERDECK_S (msg)
+
+			LOG_HYPERDECK_STRING (hyperdeck,msg)
+
 			sprintf (msg, "Hyperdeck n°%d file format: %s", hyperdeck->number + 1, hyperdeck_file_format);
+
 			show_message_window (msg);
+
 			continue;
 		}
 	}
 
 	next_line (hyperdeck);
-g_mutex_unlock (&hyperdeck->connection_mutex);
+
+	g_mutex_unlock (&hyperdeck->connection_mutex);
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -1285,11 +1507,22 @@ response_t responses_list[] = { {200, "OK", NULL}, \
 				{0 , "unknown message", NULL} };
 
 
+gpointer reconnect_hyperdeck (hyperdeck_t *hyperdeck)
+{
+	LOG_HYPERDECK_STRING (hyperdeck,"reconnect_hyperdeck ()")
+
+	SLEEP (5)
+
+	connect_hyperdeck (hyperdeck);
+
+	return NULL;
+}
+
 gboolean close_hyperdeck (hyperdeck_t *hyperdeck)
 {
 	disk_list_t *disk_list_tmp;
 
-DEBUG_HYPERDECK_S ("close hyperdeck")
+	LOG_HYPERDECK_STRING (hyperdeck,"close_hyperdeck")
 
 	hyperdeck->connected = FALSE;
 
@@ -1300,14 +1533,18 @@ DEBUG_HYPERDECK_S ("close hyperdeck")
 	gtk_widget_set_sensitive (hyperdeck->root_widget, FALSE);
 
 	hyperdeck->disk_slot_id = 0;
+
 	while (hyperdeck->slot_1_disk_list != NULL) {
 		disk_list_tmp = hyperdeck->slot_1_disk_list;
 		hyperdeck->slot_1_disk_list = disk_list_tmp->next;
+
 		g_free (disk_list_tmp);
 	}
+
 	while (hyperdeck->slot_2_disk_list != NULL) {
 		disk_list_tmp = hyperdeck->slot_2_disk_list;
 		hyperdeck->slot_2_disk_list = disk_list_tmp->next;
+
 		g_free (disk_list_tmp);
 	}
 
@@ -1323,14 +1560,17 @@ DEBUG_HYPERDECK_S ("close hyperdeck")
 
 	hyperdeck->slot_1_is_mounted = FALSE;
 	gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1), pixbuf_S1E);
+
 	hyperdeck->slot_2_is_mounted = FALSE;
 	gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2), pixbuf_S2E);
 
-	closesocket (hyperdeck->socket);
-
 	g_thread_join (hyperdeck->connection_thread);
-	hyperdeck->connection_thread = NULL;
-DEBUG_HYPERDECK_S ("close hyperdeck fin")
+
+	if (hyperdeck->reboot) hyperdeck->connection_thread = g_thread_new (NULL, (GThreadFunc)reconnect_hyperdeck, hyperdeck);
+	else hyperdeck->connection_thread = NULL;
+
+	LOG_HYPERDECK_STRING (hyperdeck,"close_hyperdeck () return")
+
 	return G_SOURCE_REMOVE;
 }
 
@@ -1339,50 +1579,62 @@ void receive_response_from_hyperdeck (hyperdeck_t *hyperdeck)
 	int response_code;
 	int i;
 
-g_mutex_lock (&hyperdeck->connection_mutex);
+	g_mutex_lock (&hyperdeck->connection_mutex);
+
 	while ((hyperdeck->recv_len = recv (hyperdeck->socket, hyperdeck->buffer, sizeof (hyperdeck->buffer), 0)) > 0) {
-DEBUG_HYPERDECK_S ("receive_response_from_hyperdeck")
-hyperdeck->buffer[hyperdeck->recv_len] = '\0';
-DEBUG_HYPERDECK_S ("[buffer]")
-DEBUG_HYPERDECK_S (hyperdeck->buffer)
+		LOG_HYPERDECK_STRING (hyperdeck,"receive_response_from_hyperdeck")
+
+		hyperdeck->buffer[hyperdeck->recv_len] = '\0';
+		LOG_HYPERDECK_STRING (hyperdeck,"[buffer]")
+		LOG_HYPERDECK_STRING (hyperdeck,hyperdeck->buffer)
 
 		for (hyperdeck->index = 0; hyperdeck->index < hyperdeck->recv_len; ) {
 			if ((hyperdeck->buffer[hyperdeck->index + 1] == ':') || (hyperdeck->buffer[hyperdeck->index + 2] == ':') || (hyperdeck->buffer[hyperdeck->index + 3] == ':')) {
 				response_disk_list_suite (hyperdeck);
-DEBUG_HYPERDECK_S ("[fin d'un message contenant une liste partiel de fichier]\n")
+
+				LOG_HYPERDECK_STRING (hyperdeck,"[fin d'un message contenant une liste partielle de fichier]\n")
+
 				continue;
 			}
+
 			if (sscanf (&hyperdeck->buffer[hyperdeck->index], "%d", &response_code) != 1) {
-DEBUG_HYPERDECK_S ("Arg, message unconnu")
+				LOG_HYPERDECK_STRING (hyperdeck,"Arg, message unconnu")
+
 				next_line (hyperdeck);
+
 				continue;
 			}
+
+			LOG_HYPERDECK_INT (hyperdeck,response_code)
+
 			next_line (hyperdeck);
 
-DEBUG_HYPERDECK_D (response_code)
 			for (i = 0; responses_list[i].code != 0; i++) {
 				if (responses_list[i].code == response_code) {
-DEBUG_HYPERDECK_S (responses_list[i].text)
+					LOG_HYPERDECK_STRING (hyperdeck,responses_list[i].text)
+
 					if (responses_list[i].func != NULL) {
 						hyperdeck->response = &responses_list[i];
+
 						g_idle_add ((GSourceFunc)responses_list[i].func, hyperdeck);
-g_mutex_lock (&hyperdeck->connection_mutex);
+
+						g_mutex_lock (&hyperdeck->connection_mutex);
 					}
+
 					break;
 				}
 			}
-DEBUG_HYPERDECK_S ("[fin d'un message]\n")
+
+			LOG_HYPERDECK_STRING (hyperdeck,"[fin d'un message]")
 		}
 	}
-g_mutex_unlock (&hyperdeck->connection_mutex);
 
-//	g_idle_add ((GSourceFunc)close_hyperdeck, hyperdeck);
+	g_mutex_unlock (&hyperdeck->connection_mutex);
 
-	if (hyperdeck->reboot == TRUE) {
-		SLEEP (5)
-		hyperdeck->reboot = FALSE;
-		connect_to_hyperdeck (hyperdeck);
-	}
+	hyperdeck->connected = FALSE;
+	closesocket (hyperdeck->socket);
+
+	g_idle_add ((GSourceFunc)close_hyperdeck, hyperdeck);
 }
 
 gboolean g_source_hyperdeck_is_connected (hyperdeck_t *hyperdeck)
@@ -1392,19 +1644,23 @@ gboolean g_source_hyperdeck_is_connected (hyperdeck_t *hyperdeck)
 	return G_SOURCE_REMOVE;
 }
 
-gpointer connect_to_hyperdeck (hyperdeck_t *hyperdeck)
+gpointer connect_hyperdeck (hyperdeck_t *hyperdeck)
 {
-DEBUG_HYPERDECK_S ("connect_to_hyperdeck")
+	LOG_HYPERDECK_STRING (hyperdeck,"connect_hyperdeck ()")
+
 	hyperdeck->socket = socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
 	memset (&hyperdeck->adresse, 0, sizeof (struct sockaddr_in));
 	hyperdeck->adresse.sin_family = AF_INET;
 	hyperdeck->adresse.sin_port = htons (9993);
-	hyperdeck->adresse.sin_addr.s_addr = inet_addr (hyperdeck->adresse_ip);
+	hyperdeck->adresse.sin_addr.s_addr = inet_addr (hyperdeck->ip_address);
 
 	if (connect (hyperdeck->socket, (struct sockaddr *) &hyperdeck->adresse, sizeof (struct sockaddr_in)) == 0) {
 		g_idle_add ((GSourceFunc)g_source_hyperdeck_is_connected, hyperdeck);
+
 		hyperdeck->connected = TRUE;
+		hyperdeck->reboot = TRUE;
+
 		SEND (hyperdeck, msg_remote_enable)
 //		SEND (hyperdeck, msg_remote_override)
 		SEND (hyperdeck, msg_configuration)
@@ -1412,14 +1668,15 @@ DEBUG_HYPERDECK_S ("connect_to_hyperdeck")
 		receive_response_from_hyperdeck (hyperdeck);
 	} else closesocket (hyperdeck->socket);
 
-	g_idle_add ((GSourceFunc)close_hyperdeck, hyperdeck);
+	LOG_HYPERDECK_STRING (hyperdeck,"connect_hyperdeck () return")
 
 	return NULL;
 }
 
-void disconnect_from_hyperdeck (hyperdeck_t* hyperdeck)
+void disconnect_hyperdeck (hyperdeck_t* hyperdeck)
 {
+	hyperdeck->reboot = FALSE;
+
 	send (hyperdeck->socket, msg_quit, 5, 0);
-//	close_hyperdeck (hyperdeck);	//?
 }
 

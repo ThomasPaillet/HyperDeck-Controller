@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,10 +17,19 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "Fresque_Batch.h"
+
+#include "File.h"
+#include "Fresque.h"
+#include "Logging.h"
+#include "Misc.h"
+#include "HyperDeck_Codec.h"
+#include "Render_Transition_8.h"
+#include "Render_Transition_16.h"
+#include "Transition.h"
+
 #include <string.h>
 #include <time.h>
-
-#include "HyperDeck.h"
 
 
 typedef struct add_transition_task_s {
@@ -37,8 +46,7 @@ GtkWidget *fresque_batch_menu;
 GtkWidget *add_transition_frame;
 GtkWidget *add_transition_label;
 GtkWidget *add_transition_progress_bar;
-/*int64_t nb_frames;
-int64_t frame_count;*/
+
 guint add_transition_g_source_id = 0;
 
 fresque_batch_t *fresque_batches = NULL;
@@ -68,12 +76,13 @@ gpointer add_transition (void)
 	float sin_minus_7, stride, step;
 	time_t start_time, end_time;
 	struct tm *tm;
-	char creation_time[32];
+	char creation_time[48];
 	int i;
 	hyperdeck_t* hyperdeck;
 	drop_list_t *drop_list;
 
-DEBUG_S ("add_transition")
+	LOG_STRING ("add_transition ()")
+
 	if (add_transition_g_source_id != 0) {
 		g_source_remove (add_transition_g_source_id);
 		add_transition_g_source_id = 0;
@@ -92,15 +101,15 @@ DEBUG_S ("add_transition")
 	frame_out = av_frame_alloc ();
 	frame_out->format = hyperdeck_pix_fmt;
 	frame_out->chroma_location = HYPERDECK_CHROMA_LOCATION;
-	frame_out->key_frame = 1;
+//	frame_out->key_frame = 1;
 	frame_out->pict_type = AV_PICTURE_TYPE_I;
-	if (progressif) {
+/*	if (progressif) {
 		frame_out->interlaced_frame = 0;
 		frame_out->top_field_first = 0;
 	} else {
 		frame_out->interlaced_frame = 1;
 		frame_out->top_field_first = 1;
-	}
+	}*/
 	frame_out->color_primaries = hyperdeck_color_primaries;
 	frame_out->color_trc = hyperdeck_color_trc;
 	frame_out->colorspace = hyperdeck_colorspace;
@@ -114,11 +123,14 @@ DEBUG_S ("add_transition")
 		sws_context = sws_getContext (hyperdeck_width, nb_lines, AV_PIX_FMT_YUV444P, hyperdeck_width, nb_lines, AV_PIX_FMT_YUV422P, SWS_BILINEAR, NULL, NULL, NULL);
 	else sws_context = sws_getContext (hyperdeck_width, nb_lines, AV_PIX_FMT_YUV444P16LE, hyperdeck_width, nb_lines, AV_PIX_FMT_YUV422P10LE, SWS_BILINEAR, NULL, NULL, NULL);
 
-g_mutex_lock (&add_transition_mutex);
+	g_mutex_lock (&add_transition_mutex);
+
 	while (add_transition_tasks != NULL) {
 		add_transition_task_tmp = add_transition_tasks;
 		add_transition_tasks = add_transition_tasks->next;
-g_mutex_unlock (&add_transition_mutex);
+
+		g_mutex_unlock (&add_transition_mutex);
+
 		g_idle_add ((GSourceFunc)g_source_init_progress_bar, add_transition_progress_bar);
 
 //g_timeout_add (1000, (GSourceFunc)g_source_update_transcoding_progress_bar, transcoding_frame);
@@ -221,9 +233,10 @@ g_mutex_unlock (&add_transition_mutex);
 			else render_transition_16 (hyperdecks + fresque_batch->first_hyperdeck_number, hyperdeck, drop_list, background_batch->fresque_frame, fresque_batch->fresque_frame, nb_flux, last_x, sin_minus_7, stride, step, sws_context, frame_tmp, frame_out, creation_time, FALSE);
 		}
 
-g_mutex_lock (&add_transition_mutex);
+		g_mutex_lock (&add_transition_mutex);
 	}
-g_mutex_unlock (&add_transition_mutex);
+
+	g_mutex_unlock (&add_transition_mutex);
 
 	sws_freeContext (sws_context);
 	av_frame_unref (frame_out);
@@ -240,9 +253,11 @@ g_mutex_unlock (&add_transition_mutex);
 		add_transition_g_source_id = g_timeout_add (-end_time * 1000, g_source_hide_transcoding_progress_bar, NULL);
 	else g_idle_add (g_source_hide_transcoding_progress_bar, NULL);*/
 
-	g_idle_add ((GSourceFunc)g_source_consume_thread, add_transition_thread);
+	g_idle_add_full (G_PRIORITY_LOW, (GSourceFunc)g_source_consume_thread, add_transition_thread, NULL);
 	add_transition_thread = NULL;
-DEBUG_S ("add_transition END")
+
+	LOG_STRING ("add_transition () return")
+
 	return NULL;
 }
 
@@ -250,38 +265,41 @@ void add_transition_stub (void)
 {
 	int nb_flux;
 	add_transition_task_t *add_transition_task_tmp;
-DEBUG_S ("add_transition_stub")
-DEBUG_S ("current_fresque_batch->first_hyperdeck_number")
-DEBUG_D (current_fresque_batch->first_hyperdeck_number)
-DEBUG_S ("current_fresque_batch->nb_flux")
-DEBUG_D (current_fresque_batch->nb_flux)
-DEBUG_S ("previous_fresque_batch->first_hyperdeck_number")
-DEBUG_D (previous_fresque_batch->first_hyperdeck_number)
-DEBUG_S ("previous_fresque_batch->nb_flux")
-DEBUG_D (previous_fresque_batch->nb_flux)
+
+	LOG_STRING ("add_transition_stub ()")
+	LOG_STRING_INT ("current_fresque_batch->first_hyperdeck_number = ",current_fresque_batch->first_hyperdeck_number)
+	LOG_STRING_INT ("current_fresque_batch->nb_flux = ",current_fresque_batch->nb_flux)
+	LOG_STRING_INT ("previous_fresque_batch->first_hyperdeck_number = ",previous_fresque_batch->first_hyperdeck_number)
+	LOG_STRING_INT ("previous_fresque_batch->nb_flux = ",previous_fresque_batch->nb_flux)
+
 	nb_flux = current_fresque_batch->first_hyperdeck_number + current_fresque_batch->nb_flux;
+
 	if (nb_flux > previous_fresque_batch->first_hyperdeck_number + previous_fresque_batch->nb_flux)
 		nb_flux = previous_fresque_batch->first_hyperdeck_number + previous_fresque_batch->nb_flux;
 
 	nb_flux -= current_fresque_batch->first_hyperdeck_number;
-DEBUG_S ("nb_flux")
-DEBUG_D (nb_flux)
+
+	LOG_STRING_INT ("nb_flux = ",nb_flux)
 
 	if ((previous_fresque_batch->first_hyperdeck_number <= current_fresque_batch->first_hyperdeck_number) && (nb_flux > 0)) {
-DEBUG_S ("fresques overlap OK")
+		LOG_STRING ("fresques overlap OK")
+
 		add_transition_task_tmp = g_malloc (sizeof (add_transition_task_t));
 		add_transition_task_tmp->previous_fresque_batch = previous_fresque_batch;
 		add_transition_task_tmp->current_fresque_batch = current_fresque_batch;
 		add_transition_task_tmp->nb_flux = nb_flux;
 
-g_mutex_lock (&add_transition_mutex);
+		g_mutex_lock (&add_transition_mutex);
+
 		add_transition_task_tmp->next = add_transition_tasks;
 		add_transition_tasks = add_transition_task_tmp;
-g_mutex_unlock (&add_transition_mutex);
+
+		g_mutex_unlock (&add_transition_mutex);
 
 		if (add_transition_thread == NULL) add_transition_thread = g_thread_new (NULL, (GThreadFunc)add_transition, NULL);
 	} else show_message_window ("Les deux fresques ne se recouvrent pas correctement.");
-DEBUG_S ("add_transition_stub END")
+
+	LOG_STRING ("add_transition_stub () return")
 }
 
 gboolean popup_fresque_batch_menu (GtkWidget *event_box, GdkEventButton *event)
@@ -289,16 +307,19 @@ gboolean popup_fresque_batch_menu (GtkWidget *event_box, GdkEventButton *event)
 	const gchar *name;
 	gint index;
 	GtkListBoxRow *list_box_row;
-DEBUG_S ("popup_fresque_batch_menu")
+
+	LOG_STRING ("popup_fresque_batch_menu ()")
+
 	if (event->type == GDK_BUTTON_PRESS) {
 		if (event->button == GDK_BUTTON_SECONDARY) {
 			name = gtk_frame_get_label (GTK_FRAME (gtk_bin_get_child (GTK_BIN (event_box))));
 
-g_mutex_lock (&fresque_batch_mutex);
+			g_mutex_lock (&fresque_batch_mutex);
+
 			for (current_fresque_batch = fresque_batches; current_fresque_batch != NULL; current_fresque_batch = current_fresque_batch->next) {
 				if (strcmp (current_fresque_batch->name, name) == 0) {
-DEBUG_S ("current_fresque_batch")
-DEBUG_S (current_fresque_batch->name)
+					LOG_2_STRINGS ("current_fresque_batch->name = ",current_fresque_batch->name)
+
 					index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque_batch->list_box_row));
 
 					if (index > 0) {
@@ -307,18 +328,24 @@ DEBUG_S (current_fresque_batch->name)
 						if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
 							previous_fresque_batch = fresque_batches;
 							while (GTK_LIST_BOX_ROW (previous_fresque_batch->list_box_row) != list_box_row) previous_fresque_batch = previous_fresque_batch->next;
-DEBUG_S ("previous_fresque_batch")
-DEBUG_S (previous_fresque_batch->name)
+
+							LOG_2_STRINGS ("previous_fresque_batch->name = ",previous_fresque_batch->name)
+
 							gtk_menu_popup_at_pointer (GTK_MENU (fresque_batch_menu), NULL);
 						}
 					}
+
 					break;
 				}
 			}
-g_mutex_unlock (&fresque_batch_mutex);
+
+			g_mutex_unlock (&fresque_batch_mutex);
+
 			return GDK_EVENT_STOP;
 		}
 	}
+
+	LOG_STRING ("popup_fresque_batch_menu () return")
 
 	return GDK_EVENT_PROPAGATE;
 }
@@ -332,8 +359,9 @@ gint fresque_batch_list_box_sort (GtkListBoxRow *row1, GtkListBoxRow *row2, fres
 void initialize_fresque_batch (fresque_batch_t *fresque_batch)
 {
 	GtkWidget *event_box, *frame, *list_box;
-DEBUG_S ("initialize_fresque_batch")
-DEBUG_S (fresque_batch->name)
+
+	LOG_2_STRINGS ("initialize_fresque_batch () ",fresque_batch->name)
+
 	fresque_batch->nb_fresques = 0;
 
 	event_box = gtk_event_box_new ();
@@ -360,6 +388,8 @@ DEBUG_S (fresque_batch->name)
 	fresque_batch->list_box = list_box;
 
 	fresque_batch->initialized = TRUE;
+
+	LOG_STRING ("initialize_fresque_batch () return")
 }
 
 void create_add_transition_frame (GtkBox *box)

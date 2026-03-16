@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,7 +17,11 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "HyperDeck.h"
+#include "Misc.h"
+
+#include "Fresque.h"
+#include "HyperDeck_Codec.h"
+#include "Logging.h"
 
 
 gboolean g_source_hide_widget (GtkWidget *widget)
@@ -139,9 +143,9 @@ gboolean g_source_hide_hyperdeck_progress_bar (hyperdeck_t* hyperdeck)
 
 gboolean g_source_consume_thread (GThread *thread)
 {
-DEBUG_S("g_source_consume_thread")
+	LOG_STRING("g_source_consume_thread")
+
 	g_thread_join (thread);
-//	*thread = NULL;
 
 	return G_SOURCE_REMOVE;
 }
@@ -183,23 +187,31 @@ void save_hyperdeck_state (void)
 	int i, j;
 	fresque_batch_t *fresque_batch_tmp;
 
+	LOG_STRING("save_hyperdeck_state ()")
+
 	state_file = fopen ("state.dat", "wb");
-DEBUG_S("save_hyperdeck_state")
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) fwrite (&hyperdecks[i].default_preset_clip_id, sizeof (int), 1, state_file);
 
-	if (feof (state_file)) { fclose (state_file); return; }
+	if (feof (state_file)) {
+		fclose (state_file);
+
+		return;
+	}
 
 	for (fresque_batch_tmp = fresque_batches; fresque_batch_tmp != NULL; fresque_batch_tmp = fresque_batch_tmp->next) {
 		fresque_batch_tmp->index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row));
-DEBUG_D (fresque_batch_tmp->index)
+
+		LOG_INT (fresque_batch_tmp->index)
 	}
-DEBUG_S ("fresques_list_box_num")
-DEBUG_D (fresques_list_box_num)
+
+	LOG_STRING_INT ("fresques_list_box_num = ",fresques_list_box_num)
+
 	for (i = 0; i < fresques_list_box_num; i++) {
 		for (fresque_batch_tmp = fresque_batches; fresque_batch_tmp != NULL; fresque_batch_tmp = fresque_batch_tmp->next) {
 			if (fresque_batch_tmp->index == i) {
-DEBUG_S(fresque_batch_tmp->name)
+				LOG_STRING (fresque_batch_tmp->name)
+
 				fwrite (&fresque_batch_tmp->name_len, sizeof (int), 1, state_file);
 				fwrite (fresque_batch_tmp->name, 1, fresque_batch_tmp->name_len, state_file);
 
@@ -207,18 +219,22 @@ DEBUG_S(fresque_batch_tmp->name)
 				fwrite (&fresque_batch_tmp->fresque_frame->colorspace, sizeof (enum AVColorSpace), 1, state_file);
 				fwrite (&fresque_batch_tmp->fresque_frame->width, sizeof (int), 1, state_file);
 				fwrite (&fresque_batch_tmp->fresque_frame->height, sizeof (int), 1, state_file);
+
 				for (j = 0; j < 3; j++) {
 					fwrite (fresque_batch_tmp->fresque_frame->data[j], 1, fresque_batch_tmp->fresque_frame->linesize[j] * fresque_batch_tmp->fresque_frame->height, state_file);
 				}
+
 				fwrite (&fresque_batch_tmp->nb_flux, sizeof (int), 1, state_file);
 				fwrite (&fresque_batch_tmp->first_hyperdeck_number, sizeof (int), 1, state_file);
+
 				break;
 			}
 		}
 	}
-DEBUG_S("save_hyperdeck_state END")
 
 	fclose (state_file);
+
+	LOG_STRING ("save_hyperdeck_state () return")
 }
 
 void restore_hyperdeck_state (void)
@@ -227,29 +243,40 @@ void restore_hyperdeck_state (void)
 	int i;
 	fresque_batch_t *fresque_batch_tmp;
 
+	LOG_STRING("restore_hyperdeck_state ()")
+
 	if ((state_file = fopen ("state.dat", "rb")) == NULL) return;
-DEBUG_S("restore_hyperdeck_state")
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) fread (&hyperdecks[i].default_preset_clip_id, sizeof (int), 1, state_file);
 
 	while (TRUE) {
 		fresque_batch_tmp = g_malloc (sizeof (fresque_batch_t));
 		fread (&fresque_batch_tmp->name_len, sizeof (int), 1, state_file);
-		if (feof (state_file)) { g_free (fresque_batch_tmp); break; }
+
+		if (feof (state_file)) {
+			g_free (fresque_batch_tmp);
+
+			break;
+		}
+
 		fread (fresque_batch_tmp->name, 1, fresque_batch_tmp->name_len, state_file);
 		fresque_batch_tmp->name[fresque_batch_tmp->name_len] = '\0';
 
 		fresque_batch_tmp->fresque_frame = av_frame_alloc ();
+
 		fread (&fresque_batch_tmp->fresque_frame->format, sizeof (int), 1, state_file);
 		fread (&fresque_batch_tmp->fresque_frame->colorspace, sizeof (enum AVColorSpace), 1, state_file);
 		fread (&fresque_batch_tmp->fresque_frame->width, sizeof (int), 1, state_file);
 		fread (&fresque_batch_tmp->fresque_frame->height, sizeof (int), 1, state_file);
+
 		fresque_batch_tmp->fresque_frame->pict_type = AV_PICTURE_TYPE_I;
+
 		av_frame_get_buffer (fresque_batch_tmp->fresque_frame, 0);
 
 		for (i = 0; i < 3; i++) {
 			fread (fresque_batch_tmp->fresque_frame->data[i], 1, fresque_batch_tmp->fresque_frame->linesize[i] * fresque_batch_tmp->fresque_frame->height, state_file);
 		}
+
 		fread (&fresque_batch_tmp->nb_flux, sizeof (int), 1, state_file);
 		fread (&fresque_batch_tmp->first_hyperdeck_number, sizeof (int), 1, state_file);
 
@@ -263,5 +290,7 @@ DEBUG_S("restore_hyperdeck_state")
 
 	state_file = fopen ("state.dat", "wb");
 	fclose (state_file);
+
+	LOG_STRING("restore_hyperdeck_state () return")
 }
 

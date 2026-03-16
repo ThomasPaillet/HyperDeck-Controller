@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,7 +17,7 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <gdk/gdk.h>
+#include "../Pixbufs.h"
 
 /*
 +-----+---+-----+---+-----+----------+------+--------------------------------------------------+------------------------+

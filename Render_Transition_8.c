@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,9 +17,13 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <libswscale/swscale.h>
+#include "Render_Transition_8.h"
 
-#include "HyperDeck.h"
+#include "File.h"
+#include "HyperDeck_Codec.h"
+#include "Logging.h"
+#include "Transcoding.h"
+#include "Transition.h"
 
 
 void stripe_color_RGB_to_YUV_8 (void)
@@ -54,30 +58,32 @@ void stripe_color_RGB_to_YUV_8 (void)
 
 void render_transition_8 (hyperdeck_t* first_hyperdeck, hyperdeck_t* hyperdeck, drop_list_t *drop_list, AVFrame *background_frame, AVFrame *fresque_frame, int nb_flux, float *last_x, float sin_minus_7, float stride, float step, struct SwsContext *sws_context, AVFrame *frame_tmp, AVFrame *frame_out, char *creation_time, gboolean reverse)
 {
-	AVFormatContext *av_format_context_out = NULL;
 	AVCodecContext *av_codec_context_out;
 	AVStream *av_stream_out;
-	AVPacket packet;
+	AVPacket *packet;
 	gboolean transition_inv;
 	int x, y, frame_duration, j;
 	int background_frame_linesize, fresque_frame_linesize, frame_tmp_linesize;
 	int x_background, x_fresque, x_frame_tmp, n_bytes, frame_nb, fade;
 	float *last_x_2, x_float, x_float_2, dist;
 
-	create_output_context (hyperdeck, &av_format_context_out, &av_codec_context_out, &av_stream_out, creation_time);
+	LOG_HYPERDECK_STRING(hyperdeck,"render_transition_8 ()")
 
-	if (avformat_write_header (av_format_context_out, NULL) < 0) {
-DEBUG_HYPERDECK_S("avformat_write_header NOOK")
+	create_output_context (hyperdeck, &drop_list->av_format_context_out, &av_codec_context_out, &av_stream_out, creation_time);
+
+	if (avformat_write_header (drop_list->av_format_context_out, NULL) < 0) {
+		LOG_HYPERDECK_STRING(hyperdeck,"avformat_write_header NOOK")
+
 		avcodec_free_context (&av_codec_context_out);
-		avformat_free_context (av_format_context_out);
+		avformat_free_context (drop_list->av_format_context_out);
 		g_free (drop_list);
+
 		return;
 	}
-DEBUG_HYPERDECK_S("avformat_write_header OK")
 
-	packet.data = NULL;
-	packet.size = 0;
-	av_init_packet (&packet);
+	LOG_HYPERDECK_STRING(hyperdeck,"avformat_write_header OK")
+
+	packet = av_packet_alloc ();
 
 	frame_duration = (av_stream_out->time_base.den / av_codec_context_out->framerate.num) * av_codec_context_out->framerate.den;
 
@@ -101,10 +107,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 
 	avcodec_send_frame (av_codec_context_out, frame_out);
 
-	avcodec_receive_packet (av_codec_context_out, &packet);
-	packet.stream_index = av_stream_out->index;
-	packet.duration = frame_duration;
-	av_interleaved_write_frame (av_format_context_out, &packet);
+	avcodec_receive_packet (av_codec_context_out, packet);
+	packet->stream_index = av_stream_out->index;
+	packet->duration = frame_duration;
+	av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 	if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 
@@ -202,10 +208,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet);
-				packet.stream_index = av_stream_out->index;
-				packet.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet);
+				avcodec_receive_packet (av_codec_context_out, packet);
+				packet->stream_index = av_stream_out->index;
+				packet->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 				if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 			}
@@ -242,10 +248,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 			frame_out->pts += frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_out);
 
-			avcodec_receive_packet (av_codec_context_out, &packet);
-			packet.stream_index = av_stream_out->index;
-			packet.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet);
+			avcodec_receive_packet (av_codec_context_out, packet);
+			packet->stream_index = av_stream_out->index;
+			packet->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 			if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 		} else {
@@ -330,10 +336,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet);
-				packet.stream_index = av_stream_out->index;
-				packet.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet);
+				avcodec_receive_packet (av_codec_context_out, packet);
+				packet->stream_index = av_stream_out->index;
+				packet->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 				if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 			}
@@ -362,10 +368,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 			frame_out->pts += frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_out);
 
-			avcodec_receive_packet (av_codec_context_out, &packet);
-			packet.stream_index = av_stream_out->index;
-			packet.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet);
+			avcodec_receive_packet (av_codec_context_out, packet);
+			packet->stream_index = av_stream_out->index;
+			packet->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 			if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 		}
@@ -512,10 +518,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet);
-				packet.stream_index = av_stream_out->index;
-				packet.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet);
+				avcodec_receive_packet (av_codec_context_out, packet);
+				packet->stream_index = av_stream_out->index;
+				packet->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 				if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 			}
@@ -728,10 +734,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet);
-				packet.stream_index = av_stream_out->index;
-				packet.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet);
+				avcodec_receive_packet (av_codec_context_out, packet);
+				packet->stream_index = av_stream_out->index;
+				packet->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 				if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 			}
@@ -792,10 +798,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 			frame_out->pts = frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_out);
 
-			avcodec_receive_packet (av_codec_context_out, &packet);
-			packet.stream_index = av_stream_out->index;
-			packet.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet);
+			avcodec_receive_packet (av_codec_context_out, packet);
+			packet->stream_index = av_stream_out->index;
+			packet->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 			if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 
@@ -862,10 +868,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet);
-				packet.stream_index = av_stream_out->index;
-				packet.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet);
+				avcodec_receive_packet (av_codec_context_out, packet);
+				packet->stream_index = av_stream_out->index;
+				packet->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 				if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 			}
@@ -894,10 +900,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 			frame_out->pts += frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_out);
 
-			avcodec_receive_packet (av_codec_context_out, &packet);
-			packet.stream_index = av_stream_out->index;
-			packet.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet);
+			avcodec_receive_packet (av_codec_context_out, packet);
+			packet->stream_index = av_stream_out->index;
+			packet->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 			if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 		} else {
@@ -1007,10 +1013,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet);
-				packet.stream_index = av_stream_out->index;
-				packet.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet);
+				avcodec_receive_packet (av_codec_context_out, packet);
+				packet->stream_index = av_stream_out->index;
+				packet->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 				if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 			}
@@ -1040,10 +1046,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 			frame_out->pts += frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_out);
 
-			avcodec_receive_packet (av_codec_context_out, &packet);
-			packet.stream_index = av_stream_out->index;
-			packet.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet);
+			avcodec_receive_packet (av_codec_context_out, packet);
+			packet->stream_index = av_stream_out->index;
+			packet->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 			if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 		}
@@ -1117,10 +1123,10 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 			frame_out->pts += frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_out);
 
-			avcodec_receive_packet (av_codec_context_out, &packet);
-			packet.stream_index = av_stream_out->index;
-			packet.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet);
+			avcodec_receive_packet (av_codec_context_out, packet);
+			packet->stream_index = av_stream_out->index;
+			packet->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 			if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 		}
@@ -1142,24 +1148,22 @@ DEBUG_HYPERDECK_S("avformat_write_header OK")
 		frame_out->pts += frame_duration;
 		avcodec_send_frame (av_codec_context_out, frame_out);
 
-		avcodec_receive_packet (av_codec_context_out, &packet);
-		packet.stream_index = av_stream_out->index;
-		packet.duration = frame_duration;
-		av_interleaved_write_frame (av_format_context_out, &packet);
+		avcodec_receive_packet (av_codec_context_out, packet);
+		packet->stream_index = av_stream_out->index;
+		packet->duration = frame_duration;
+		av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 		if (hyperdeck == first_hyperdeck) transcoding_frames[first_hyperdeck->number].frame_count++;
 	}
 
-	av_write_trailer (av_format_context_out);
-	drop_list->ffmpeg_buffer_size = avio_close_dyn_buf (av_format_context_out->pb, &drop_list->ffmpeg_buffer);
+	av_write_trailer (drop_list->av_format_context_out);
+	drop_list->ffmpeg_buffer_size = avio_close_dyn_buf (drop_list->av_format_context_out->pb, &drop_list->ffmpeg_buffer);
 
-g_mutex_lock (&hyperdeck->drop_mutex);
-	drop_list->next = hyperdeck->drop_list_file;
-	hyperdeck->drop_list_file = drop_list;
-	if (hyperdeck->drop_thread == NULL) hyperdeck->drop_thread = g_thread_new (NULL, (GThreadFunc)drop_to_hyperdeck, hyperdeck);
-g_mutex_unlock (&hyperdeck->drop_mutex);
+	add_drop_list_to_hyperdeck_transfert_queue (drop_list, hyperdeck);
 
+	av_packet_free (&packet);
 	avcodec_free_context (&av_codec_context_out);
-	avformat_free_context (av_format_context_out);
+
+	LOG_HYPERDECK_STRING(hyperdeck,"render_transition_8 () return")
 }
 

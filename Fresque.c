@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,10 +17,14 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <string.h>
+#include "Fresque.h"
 
-#include "HyperDeck.h"
+#include "File.h"
 #include "HyperDeck_Protocol.h"
+#include "Logging.h"
+#include "Pixbufs.h"
+
+#include <string.h>
 
 
 fresque_t *fresques = NULL;
@@ -33,7 +37,7 @@ int fresques_list_box_num = 0;
 
 GtkWidget *fresques_stop_button, *fresques_play_button, *fresques_loop_button, *fresques_up_button, *fresques_down_button, *fresques_purge_button;
 
-loop_t fresque_loop = SINGLE_CLIP_TRUE_LOOP_FALSE;
+loop_t fresques_loop = SINGLE_CLIP_TRUE_LOOP_FALSE;
 
 
 void clean_fresques (void)
@@ -57,9 +61,12 @@ void clean_fresques (void)
 
 				if (fresque_tmp->parent_fresque_batch->nb_fresques == 0) {
 					fresques_list_box_num--;
-g_mutex_lock (&fresque_batch_mutex);
+
+					g_mutex_lock (&fresque_batch_mutex);
+
 					if (fresque_tmp->parent_fresque_batch == fresque_batches) {
 						fresque_batches = fresque_tmp->parent_fresque_batch->next;
+
 						gtk_widget_destroy (fresque_tmp->parent_fresque_batch->list_box_row);
 
 						av_frame_unref (fresque_tmp->parent_fresque_batch->fresque_frame);
@@ -73,6 +80,7 @@ g_mutex_lock (&fresque_batch_mutex);
 						while (fresque_batch_tmp != NULL) {
 							if (fresque_batch_tmp == fresque_tmp->parent_fresque_batch) {
 								fresque_batch_prev->next = fresque_batch_tmp->next;
+
 								gtk_widget_destroy (fresque_batch_tmp->list_box_row);
 
 								av_frame_unref (fresque_batch_tmp->fresque_frame);
@@ -86,7 +94,8 @@ g_mutex_lock (&fresque_batch_mutex);
 							fresque_batch_tmp = fresque_batch_tmp->next;
 						}
 					}
-g_mutex_unlock (&fresque_batch_mutex);
+
+					g_mutex_unlock (&fresque_batch_mutex);
 				}
 			} else fresques_list_box_num--;
 
@@ -111,8 +120,10 @@ void deselect_fresque (void)
 	if (current_fresque != NULL) {
 		if (current_fresque->parent_fresque_batch == NULL) gtk_list_box_select_row (GTK_LIST_BOX (fresques_list_box), NULL);
 		else gtk_list_box_select_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), NULL);
+
 		current_fresque = NULL;
 	}
+
 	gtk_widget_set_sensitive (fresques_loop_button, FALSE);
 	gtk_widget_set_sensitive (fresques_play_button, FALSE);
 	gtk_widget_set_sensitive (fresques_stop_button, FALSE);
@@ -172,10 +183,12 @@ void load_fresque (GtkListBox *list_box, GtkListBoxRow *list_box_row)
 
 		if (clips_id[i] == 0) {
 			clips_id[i] = hyperdecks[i].default_preset_clip_id;
+
 			if (clips_id[i] == 0) continue;
 			else preset_exist[i] = TRUE;
 		} else {
 			fresque_exist[i] = TRUE;
+
 			send (hyperdecks[i].socket, msg_stop, 5, 0);
 		}
 
@@ -184,11 +197,13 @@ void load_fresque (GtkListBox *list_box, GtkListBoxRow *list_box_row)
 		if (preset_exist[i]) {
 			if (hyperdecks[i].loop != SINGLE_CLIP_TRUE_LOOP_TRUE) {
 				hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[SINGLE_CLIP_TRUE_LOOP_TRUE]);
 			}
-		} else if (hyperdecks[i].loop != fresque_loop) {
-			hyperdecks[i].loop = fresque_loop;
-			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[fresque_loop]);
+		} else if (hyperdecks[i].loop != fresques_loop) {
+			hyperdecks[i].loop = fresques_loop;
+
+			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[fresques_loop]);
 		}
 	}
 
@@ -207,22 +222,26 @@ void fresques_loop_button_clicked (GtkToggleButton *button)
 
 	if (current_fresque == NULL) return;
 
-	if (gtk_toggle_button_get_active (button)) fresque_loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
-	else fresque_loop = SINGLE_CLIP_TRUE_LOOP_FALSE;
+	if (gtk_toggle_button_get_active (button)) fresques_loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
+	else fresques_loop = SINGLE_CLIP_TRUE_LOOP_FALSE;
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 		if ((!hyperdecks[i].connected) || (hyperdecks[i].slot_selected == 0)) continue;
 		if (current_fresque->clips_id[i] == 0) continue;
 
-		if (hyperdecks[i].loop == fresque_loop) continue;
+		if (hyperdecks[i].loop == fresques_loop) continue;
 
-		if (fresque_loop == SINGLE_CLIP_TRUE_LOOP_TRUE) {
+		if (fresques_loop == SINGLE_CLIP_TRUE_LOOP_TRUE) {
 			if (hyperdecks[i].play) SEND ((&hyperdecks[i]), msg_play_single_clip_true_loop_true)
+
 			hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[SINGLE_CLIP_TRUE_LOOP_TRUE]);
 		} else {
 			if (hyperdecks[i].play) SEND ((&hyperdecks[i]), msg_play_single_clip_true_loop_false)
+
 			hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_FALSE;
+
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[SINGLE_CLIP_TRUE_LOOP_FALSE]);
 		}
 	}
@@ -240,15 +259,17 @@ void fresques_play_button_clicked (void)
 
 		if ((!hyperdecks[i].connected) || (hyperdecks[i].slot_selected == 0) || (current_fresque->clips_id[i] == 0)) continue;
 
-		if (hyperdecks[i].loop != fresque_loop) {
-			hyperdecks[i].loop = fresque_loop;
-			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[fresque_loop]);
+		if (hyperdecks[i].loop != fresques_loop) {
+			hyperdecks[i].loop = fresques_loop;
+
+			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[fresques_loop]);
 		}
+
 		fresque_exist[i] = TRUE;
 	}
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
-		if (fresque_exist[i]) send (hyperdecks[i].socket, msg_play_single_loop[fresque_loop], msg_play_single_loop_len[fresque_loop], 0);
+		if (fresque_exist[i]) send (hyperdecks[i].socket, msg_play_single_loop[fresques_loop], msg_play_single_loop_len[fresques_loop], 0);
 	}
 }
 
@@ -284,6 +305,7 @@ void purge_all_hyperdecks (GtkWidget *window)
 
 			if (hyperdecks[i].loop != SINGLE_CLIP_TRUE_LOOP_TRUE) {
 				hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[SINGLE_CLIP_TRUE_LOOP_TRUE]);
 			}
 
@@ -371,6 +393,7 @@ void fresques_up_button_clicked (void)
 	}
 
 	if (index == 1) gtk_widget_set_sensitive (fresques_up_button, FALSE);
+
 	gtk_widget_set_sensitive (fresques_down_button, TRUE);
 }
 
@@ -393,6 +416,7 @@ void fresques_down_button_clicked (void)
 	}
 
 	gtk_widget_set_sensitive (fresques_up_button, TRUE);
+
 	if (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 2) == NULL) gtk_widget_set_sensitive (fresques_down_button, FALSE);
 }
 

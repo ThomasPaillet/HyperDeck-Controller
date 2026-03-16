@@ -6,7 +6,7 @@ PIXBUF = $(PNG:.png=.h)
 
 .SUFFIXES: .png .h
 
-Pixbufs.o: Pixbufs.c $(PIXBUF) $(PNG)
+Pixbufs.o: Pixbufs.c ../Pixbufs.h $(PIXBUF) $(PNG)
 	$(CC) $(CFLAGS) $<
 
 .png.h:

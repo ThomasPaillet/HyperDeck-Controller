@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,6 +17,14 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "Transition.h"
+
+#include "File.h"
+#include "HyperDeck_Codec.h"
+#include "Logging.h"
+#include "Render_Transition_8.h"
+#include "Render_Transition_16.h"
+
 #include <libavutil/imgutils.h>
 #include <libavformat/avformat.h>
 #include <libavfilter/avfilter.h>
@@ -24,10 +32,8 @@
 #include <libavfilter/buffersrc.h>
 #include <dirent.h>
 
-#include "HyperDeck.h"
 
-
-typedef struct {
+typedef struct transition_rev_task_s {
 	char *fresque_name;
 	int fresque_name_len;
 	const char *suffix;
@@ -42,6 +48,7 @@ typedef struct {
 	float step;
 	char *creation_time;
 } transition_rev_task_t;
+
 
 int transition_type = 0;
 int transition_direction = 0;
@@ -72,12 +79,14 @@ gboolean check_background_resolution (const char *file_name)
 
 	if (avformat_find_stream_info (av_format_context, NULL) < 0) {
 		avformat_close_input (&av_format_context);
+
 		return FALSE;
 	}
 
 	stream_index = av_find_best_stream (av_format_context, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
 	if (stream_index < 0) {
 		avformat_close_input (&av_format_context);
+
 		return FALSE;
 	}
 
@@ -85,9 +94,11 @@ gboolean check_background_resolution (const char *file_name)
 
 	if (((av_stream_codec_parameters->width / (16 * NB_OF_HYPERDECKS)) == (av_stream_codec_parameters->height / 9)) && (av_stream_codec_parameters->height <= 4320)) {
 		avformat_close_input (&av_format_context);
+
 		return TRUE;
 	} else {
 		avformat_close_input (&av_format_context);
+
 		return FALSE;
 	}
 }
@@ -126,7 +137,9 @@ gpointer reverse_transition (transition_rev_task_t *transition_rev)
 	drop_list_t *drop_list;
 	AVFrame *frame_tmp, *frame_out;
 	struct SwsContext *sws_context;
-DEBUG_S("reverse_transition")
+
+	LOG_STRING("reverse_transition ()")
+
 	last_x = g_malloc (nb_lines * sizeof (float));
 
 	frame_tmp = av_frame_alloc ();
@@ -140,15 +153,15 @@ DEBUG_S("reverse_transition")
 	frame_out = av_frame_alloc ();
 	frame_out->format = hyperdeck_pix_fmt;
 	frame_out->chroma_location = HYPERDECK_CHROMA_LOCATION;
-	frame_out->key_frame = 1;
+//	frame_out->key_frame = 1;
 	frame_out->pict_type = AV_PICTURE_TYPE_I;
-	if (progressif) {
+/*	if (progressif) {
 		frame_out->interlaced_frame = 0;
 		frame_out->top_field_first = 0;
 	} else {
 		frame_out->interlaced_frame = 1;
 		frame_out->top_field_first = 1;
-	}
+	}*/
 	frame_out->color_primaries = hyperdeck_color_primaries;
 	frame_out->color_trc = hyperdeck_color_trc;
 	frame_out->colorspace = hyperdeck_colorspace;
@@ -164,6 +177,7 @@ DEBUG_S("reverse_transition")
 
 	for (i = 0, hyperdeck = transition_rev->first_hyperdeck; i < transition_rev->nb_flux; i++, hyperdeck++) {
 		drop_list = g_malloc (sizeof (drop_list_t));
+		drop_list->av_format_context_out = NULL;
 		drop_list->full_name = NULL;
 		drop_list->file_name_in = NULL;
 		memcpy (drop_list->file_name_out, transition_rev->fresque_name, transition_rev->fresque_name_len);
@@ -186,7 +200,9 @@ DEBUG_S("reverse_transition")
 	av_frame_unref (frame_tmp);
 	av_frame_free (&frame_tmp);
 	g_free (last_x);
-DEBUG_S("reverse_transition END")
+
+	LOG_STRING("reverse_transition () return")
+
 	return NULL;
 }
 
@@ -194,10 +210,10 @@ gpointer run_transition_task (transition_task_t *transition_task)
 {
 	AVFormatContext *av_format_context_background = NULL;
 	AVCodecContext *av_codec_context_background;
-	AVCodec *av_codec_background = NULL;
+	const AVCodec *av_codec_background = NULL;
 	int stream_index;
 	AVStream *av_stream_background;
-	AVPacket packet;
+	AVPacket *packet;
 	AVFrame *first_background_frame, *second_background_frame, *background_frame;
 	AVFrame *fresque_frame;
 	transition_rev_task_t transition_rev;
@@ -216,24 +232,31 @@ gpointer run_transition_task (transition_task_t *transition_task)
 	fresque_frame = transition_task->fresque_frame;
 	nb_flux = transition_task->nb_flux;
 
-DEBUG_S("run_transition_task")
+	LOG_STRING("run_transition_task ()")
+
 	sprintf (name, "%s" G_DIR_SEPARATOR_S "%s", background_dir, transition_task->background_name);
-DEBUG_S(name)
+
+	LOG_STRING(name)
+
 	if (avformat_open_input (&av_format_context_background, name, NULL, NULL) < 0) {
 		g_free (transition_task);
+
 		return NULL;
 	}
 
 	if (avformat_find_stream_info (av_format_context_background, NULL) < 0) {
 		avformat_close_input (&av_format_context_background);
 		g_free (transition_task);
+
 		return NULL;
 	}
 
 	stream_index = av_find_best_stream (av_format_context_background, AVMEDIA_TYPE_VIDEO, -1, -1, &av_codec_background, 0);
+
 	if (stream_index < 0) {
 		avformat_close_input (&av_format_context_background);
 		g_free (transition_task);
+
 		return NULL;
 	}
 
@@ -242,30 +265,34 @@ DEBUG_S(name)
 	if (((av_stream_background->codecpar->width / (16 * NB_OF_HYPERDECKS)) != (av_stream_background->codecpar->height / 9)) || (av_stream_background->codecpar->height > 4320)) {
 		avformat_close_input (&av_format_context_background);
 		g_free (transition_task);
+
 		return NULL;
 	}
 
 	av_codec_context_background = avcodec_alloc_context3 (av_codec_background);
 	avcodec_parameters_to_context (av_codec_context_background, av_stream_background->codecpar);
 
-g_mutex_lock (&avcodec_open2_mutex);
-	avcodec_open2 (av_codec_context_background, av_codec_background, NULL);
-g_mutex_unlock (&avcodec_open2_mutex);
+	g_mutex_lock (&avcodec_open2_mutex);
 
-	packet.data = NULL;
-	packet.size = 0;
-	av_init_packet (&packet);
+	avcodec_open2 (av_codec_context_background, av_codec_background, NULL);
+
+	g_mutex_unlock (&avcodec_open2_mutex);
+
+	packet = av_packet_alloc ();
 
 	do {
-		av_packet_unref (&packet);
-		if (av_read_frame (av_format_context_background, &packet) < 0) break;
-	} while (packet.stream_index != stream_index);
+		av_packet_unref (packet);
 
-	if (avcodec_send_packet (av_codec_context_background, &packet) < 0) {
-		av_packet_unref (&packet);
+		if (av_read_frame (av_format_context_background, packet) < 0) break;
+	} while (packet->stream_index != stream_index);
+
+	if (avcodec_send_packet (av_codec_context_background, packet) < 0) {
+		av_packet_unref (packet);
+		av_packet_free (&packet);
 		avcodec_free_context (&av_codec_context_background);
 		avformat_close_input (&av_format_context_background);
 		g_free (transition_task);
+
 		return NULL;
 	}
 
@@ -273,10 +300,12 @@ g_mutex_unlock (&avcodec_open2_mutex);
 
 	if (avcodec_receive_frame (av_codec_context_background, first_background_frame) < 0) {
 		av_frame_free (&first_background_frame);
-		av_packet_unref (&packet);
+		av_packet_unref (packet);
+		av_packet_free (&packet);
 		avcodec_free_context (&av_codec_context_background);
 		avformat_close_input (&av_format_context_background);
 		g_free (transition_task);
+
 		return NULL;
 	}
 
@@ -470,15 +499,15 @@ g_mutex_unlock (&avcodec_open2_mutex);
 	frame_out = av_frame_alloc ();
 	frame_out->format = hyperdeck_pix_fmt;
 	frame_out->chroma_location = HYPERDECK_CHROMA_LOCATION;
-	frame_out->key_frame = 1;
+//	frame_out->key_frame = 1;
 	frame_out->pict_type = AV_PICTURE_TYPE_I;
-	if (progressif) {
+/*	if (progressif) {
 		frame_out->interlaced_frame = 0;
 		frame_out->top_field_first = 0;
 	} else {
 		frame_out->interlaced_frame = 1;
 		frame_out->top_field_first = 1;
-	}
+	}*/
 	frame_out->color_primaries = hyperdeck_color_primaries;
 	frame_out->color_trc = hyperdeck_color_trc;
 	frame_out->colorspace = hyperdeck_colorspace;
@@ -494,6 +523,7 @@ g_mutex_unlock (&avcodec_open2_mutex);
 
 	for (i = 0, hyperdeck = transition_task->first_hyperdeck; i < nb_flux; i++, hyperdeck++) {
 		drop_list = g_malloc (sizeof (drop_list_t));
+		drop_list->av_format_context_out = NULL;
 		drop_list->full_name = NULL;
 		drop_list->file_name_in = NULL;
 		memcpy (drop_list->file_name_out, transition_task->file_name, transition_task->file_name_len);
@@ -520,11 +550,15 @@ g_mutex_unlock (&avcodec_open2_mutex);
 	av_frame_unref (background_frame);
 	av_frame_free (&background_frame);
 
+	av_packet_free (&packet);
+
 	avcodec_free_context (&av_codec_context_background);
 	avformat_close_input (&av_format_context_background);
 
 	g_free (transition_task);
-DEBUG_S("run_transition_task END")
+
+	LOG_STRING("run_transition_task () return")
+
 	return NULL;
 }
 
@@ -534,7 +568,7 @@ void init_transitions (void)
 
 	for (i = 0; i < NB_OF_TRANSITIONS; i++) {
 		transitions[i].switched_on = FALSE;
-		transitions[i].suffix[0] = i + 65;
+		transitions[i].suffix[0] = 'A' + i;
 		transitions[i].suffix[1] = '\0';
 		transitions[i].file_name = g_malloc (CLIP_NAME_LENGTH);
 		transitions[i].file_name[0] = '\0';

@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -19,11 +19,15 @@
 
 #include <string.h>
 
-#include "HyperDeck.h"
+#include "Preset.h"
+
+#include "Fresque.h"
 #include "HyperDeck_Protocol.h"
+#include "Logging.h"
+#include "Pixbufs.h"
 
 
-char* default_presets_name[NB_OF_PRESETS] = {"Preset 1", "Preset 2", "Preset 3", "Preset 4", "Preset 5", "Preset 6", "Preset 7", "Preset 8"};
+char *default_presets_name[NB_OF_PRESETS] = { "Preset 1", "Preset 2", "Preset 3", "Preset 4", "Preset 5", "Preset 6", "Preset 7", "Preset 8", "Preset 9", "Preset 10", "Preset 11", "Preset 12" };
 
 preset_t presets[NB_OF_PRESETS];
 
@@ -43,6 +47,7 @@ void load_preset (void)
 
 	if (preset_to_load_count > 1) {
 		preset_to_load_count--;
+
 		return;
 	} else preset_to_load_count = 0;
 
@@ -55,6 +60,7 @@ void load_preset (void)
 		for (clip_list_tmp = hyperdecks[i].list_of_clips; clip_list_tmp != NULL; clip_list_tmp = clip_list_tmp->next) {
 			if (strcmp (preset_to_load->clips[i].name, clip_list_tmp->name) == 0) {
 				clip_ids[i] = clip_list_tmp->id;
+
 				break;
 			}
 		}
@@ -70,6 +76,7 @@ void load_preset (void)
 
 			if (hyperdecks[i].loop != SINGLE_CLIP_TRUE_LOOP_TRUE) {
 				hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
+
 				gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdecks[i].image_single_loop_button), pixbuf_loop[SINGLE_CLIP_TRUE_LOOP_TRUE]);
 			}
 		} else hyperdecks[i].default_preset_clip_id = 0;
@@ -100,10 +107,12 @@ void preset_button_clicked (GtkButton *button, preset_t *preset)
 
 		if ((preset->clips[i].slot == 1) && (hyperdecks[i].slot_selected != 1) && (hyperdecks[i].slot_1_is_mounted)) {
 			send (hyperdecks[i].socket, msg_select_slot_id_1, 24, 0);
+
 			preset_to_load = preset;
 			preset_to_load_count++;
 		} else if ((preset->clips[i].slot == 2) && (hyperdecks[i].slot_selected != 2) && (hyperdecks[i].slot_2_is_mounted)) {
 			send (hyperdecks[i].socket, msg_select_slot_id_2, 24, 0);
+
 			preset_to_load = preset;
 			preset_to_load_count++;
 		}
@@ -112,13 +121,14 @@ void preset_button_clicked (GtkButton *button, preset_t *preset)
 	if (preset_to_load == NULL) {
 		preset_to_load = preset;
 		preset_to_load_count = 1;
+
 		load_preset ();
 	} else SLEEP (2);
 }
 
 GtkWidget *create_presets_frame (void)
 {
-	int i;
+	int i = 0;
 
 	GtkWidget *frame, *box1, *box2;
 
@@ -135,20 +145,29 @@ GtkWidget *create_presets_frame (void)
 		box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 		gtk_box_set_homogeneous (GTK_BOX (box2), TRUE);
 		gtk_box_set_spacing (GTK_BOX (box2), 2);
-		for (i = 0; i < 4; i++) {
+		do {
 			gtk_widget_set_sensitive (presets[i].button, presets[i].switched_on);
 			gtk_box_pack_start (GTK_BOX (box2), presets[i].button, TRUE, TRUE, 0);
-		}
-		gtk_container_add (GTK_CONTAINER (box1), box2);
+		} while (++i < 4);
+	gtk_container_add (GTK_CONTAINER (box1), box2);
 
 		box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 		gtk_box_set_homogeneous (GTK_BOX (box2), TRUE);
 		gtk_box_set_spacing (GTK_BOX (box2), 2);
-		for (i = 4; i < NB_OF_PRESETS; i++) {
+		do {
 			gtk_widget_set_sensitive (presets[i].button, presets[i].switched_on);
 			gtk_box_pack_start (GTK_BOX (box2), presets[i].button, TRUE, TRUE, 0);
-		}
-		gtk_container_add (GTK_CONTAINER (box1), box2);
+		} while (++i < 8);
+	gtk_container_add (GTK_CONTAINER (box1), box2);
+
+		box2 = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+		gtk_box_set_homogeneous (GTK_BOX (box2), TRUE);
+		gtk_box_set_spacing (GTK_BOX (box2), 2);
+		do {
+			gtk_widget_set_sensitive (presets[i].button, presets[i].switched_on);
+			gtk_box_pack_start (GTK_BOX (box2), presets[i].button, TRUE, TRUE, 0);
+		} while (++i < NB_OF_PRESETS);
+	gtk_container_add (GTK_CONTAINER (box1), box2);
 	gtk_container_add (GTK_CONTAINER (frame), box1);
 
 	return frame;
@@ -160,6 +179,7 @@ void init_presets (void)
 
 	for (i = 0; i < NB_OF_PRESETS; i++) {
 		presets[i].switched_on = FALSE;
+
 		presets[i].button = gtk_button_new_with_label (default_presets_name[i]);
 		g_signal_connect (presets[i].button, "clicked", G_CALLBACK (preset_button_clicked), &presets[i]);
 

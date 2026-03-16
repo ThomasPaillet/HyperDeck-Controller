@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -17,6 +17,15 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "Transcoding.h"
+
+#include "Encode_Fresque.h"
+#include "File.h"
+#include "HyperDeck_Codec.h"
+#include "Logging.h"
+#include "Misc.h"
+#include "Transition.h"
+
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <libavfilter/avfilter.h>
@@ -25,37 +34,33 @@
 #include <libavutil/imgutils.h>
 #include <time.h>
 
-#include "HyperDeck.h"
-
 
 remuxing_frame_t remuxing_frames[NB_OF_HYPERDECKS];
+
 transcoding_frame_t transcoding_frames[NB_OF_HYPERDECKS];
-
-
-void split_and_encode_fresque (hyperdeck_t* first_hyperdeck, drop_list_t *first_drop_list);
 
 
 void hyperdeck_remux_file (hyperdeck_t* hyperdeck, drop_list_t *drop_list)
 {
 	AVFormatContext *av_format_context_in = drop_list->av_format_context_in;
 	int stream_index = drop_list->stream_index;
-	AVFormatContext *av_format_context_out = NULL;
 	AVStream *av_stream_in, *av_stream_out;
 	AVDictionaryEntry* tag = NULL;
-	char timecode[12];
-	AVPacket packet;
+	char timecode[24];
+	AVPacket *packet;
 	int frame_duration, video_frame_count = 0;
-DEBUG_HYPERDECK_S("hyperdeck_remux_file")
+
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"hyperdeck_remux_file () ",drop_list->full_name)
 
 	sprintf (timecode, "%02d:00:00:00", hyperdeck->number + 1);
 
 	av_stream_in = av_format_context_in->streams[stream_index];
 
-	avformat_alloc_output_context2 (&av_format_context_out, NULL, file_ext, NULL);
+	avformat_alloc_output_context2 (&drop_list->av_format_context_out, NULL, file_ext, NULL);
 
-	av_dict_set (&av_format_context_out->metadata, "creation_time", drop_list->creation_time, 0);
+	av_dict_set (&drop_list->av_format_context_out->metadata, "creation_time", drop_list->creation_time, 0);
 
-	av_stream_out = avformat_new_stream (av_format_context_out, av_codec_out);
+	av_stream_out = avformat_new_stream (drop_list->av_format_context_out, av_codec_out);
 	avcodec_parameters_copy (av_stream_out->codecpar, av_stream_in->codecpar);
 
 	av_dict_set (&av_stream_out->metadata, "language", "eng", 0);
@@ -81,77 +86,76 @@ DEBUG_HYPERDECK_S("hyperdeck_remux_file")
 	av_stream_out->nb_frames = 0;
 	av_stream_out->sample_aspect_ratio = hyperdeck_sample_aspect_ratio;
 
-	avio_open_dyn_buf (&av_format_context_out->pb);
+	avio_open_dyn_buf (&drop_list->av_format_context_out->pb);
 
-	if (avformat_write_header (av_format_context_out, NULL) < 0) {
-		avformat_free_context (av_format_context_out);
+	if (avformat_write_header (drop_list->av_format_context_out, NULL) < 0) {
+		avformat_free_context (drop_list->av_format_context_out);
+
 		g_free (drop_list->full_name);
 		g_free (drop_list);
+
 		return;
 	}
 
 	frame_duration = (av_stream_out->time_base.den / av_stream_out->avg_frame_rate.num) * av_stream_out->avg_frame_rate.den;
 
-	packet.data = NULL;
-	packet.size = 0;
-	av_init_packet (&packet);
+	packet = av_packet_alloc ();
 
-	while (av_read_frame (av_format_context_in, &packet) == 0) {
-		if (packet.stream_index != stream_index) {
-			av_packet_unref (&packet);
+	while (av_read_frame (av_format_context_in, packet) == 0) {
+		if (packet->stream_index != stream_index) {
+			av_packet_unref (packet);
+
 			continue;
 		}
 
-		packet.stream_index = av_stream_out->index;
-		packet.pts = video_frame_count * frame_duration;
-		packet.dts = packet.pts;
-		packet.duration = frame_duration;
-		av_interleaved_write_frame (av_format_context_out, &packet);
+		packet->stream_index = av_stream_out->index;
+		packet->pts = video_frame_count * frame_duration;
+		packet->dts = packet->pts;
+		packet->duration = frame_duration;
+
+		av_interleaved_write_frame (drop_list->av_format_context_out, packet);
 
 		video_frame_count++;
 		remuxing_frames[hyperdeck->number].frame_count = video_frame_count;
 	}
 
+	av_write_trailer (drop_list->av_format_context_out);
+	drop_list->ffmpeg_buffer_size = avio_close_dyn_buf (drop_list->av_format_context_out->pb, &drop_list->ffmpeg_buffer);
+
+	add_drop_list_to_hyperdeck_transfert_queue (drop_list, hyperdeck);
+
+	av_packet_free (&packet);
+
 	avformat_close_input (&av_format_context_in);
 
-	av_write_trailer (av_format_context_out);
-	drop_list->ffmpeg_buffer_size = avio_close_dyn_buf (av_format_context_out->pb, &drop_list->ffmpeg_buffer);
-
-g_mutex_lock (&hyperdeck->drop_mutex);
-	drop_list->next = hyperdeck->drop_list_file;
-	hyperdeck->drop_list_file = drop_list;
-	if (hyperdeck->drop_thread == NULL) hyperdeck->drop_thread = g_thread_new (NULL, (GThreadFunc)drop_to_hyperdeck, hyperdeck);
-g_mutex_unlock (&hyperdeck->drop_mutex);
-
-	avformat_free_context (av_format_context_out);
-
-DEBUG_HYPERDECK_S("hyperdeck_remux_file END")
+	LOG_HYPERDECK_STRING(hyperdeck,"hyperdeck_remux_file () return")
 }
 
 void hyperdeck_transcode_file (hyperdeck_t* hyperdeck, drop_list_t *drop_list)
 {
 	AVFormatContext *av_format_context_in = drop_list->av_format_context_in;
-	AVCodec *av_codec_in = drop_list->av_codec_in;
+	const AVCodec *av_codec_in = drop_list->av_codec_in;
 	int stream_index = drop_list->stream_index;
-	AVFormatContext *av_format_context_out = NULL;
 	AVCodecContext *av_codec_context_in, *av_codec_context_out;
 	AVStream *av_stream_in, *av_stream_out;
-	AVPacket packet_in, packet_out;
+	AVPacket *packet_in, *packet_out;
 	AVFrame *frame_in, *frame_out;
 	struct SwsContext *sws_context;
-	const int *inv_table;
+/*	const int *inv_table;
 	int srcRange;
 	int *table;
 	int dstRange;
 	int brightness;
 	int contrast;
-	int saturation;
+	int saturation;*/
 	AVFilterContext *av_filter_context_in, *av_filter_context_out;
 	AVFilterGraph *av_filter_graph;
 	char filter_descr[256];
 	int i, frame_duration, video_frame_count = 0;
-	transition_task_t *transition_task;
-DEBUG_HYPERDECK_S("hyperdeck_transcode_file")
+//	transition_task_t *transition_task;
+
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"hyperdeck_transcode_file () ",drop_list->full_name)
+
 	av_stream_in = av_format_context_in->streams[stream_index];
 				
 	av_codec_context_in = avcodec_alloc_context3 (av_codec_in);
@@ -159,61 +163,67 @@ DEBUG_HYPERDECK_S("hyperdeck_transcode_file")
 	av_codec_context_in->time_base = av_stream_in->time_base;
 	av_codec_context_in->sample_aspect_ratio = av_stream_in->sample_aspect_ratio;
 
-g_mutex_lock (&avcodec_open2_mutex);
+	g_mutex_lock (&avcodec_open2_mutex);
+
 	avcodec_open2 (av_codec_context_in, av_codec_in, NULL);
-g_mutex_unlock (&avcodec_open2_mutex);
 
-	create_output_context (hyperdeck, &av_format_context_out, &av_codec_context_out, &av_stream_out, drop_list->creation_time);
+	g_mutex_unlock (&avcodec_open2_mutex);
 
-	if (avformat_write_header (av_format_context_out, NULL) < 0) {
+	create_output_context (hyperdeck, &drop_list->av_format_context_out, &av_codec_context_out, &av_stream_out, drop_list->creation_time);
+
+	if (avformat_write_header (drop_list->av_format_context_out, NULL) < 0) {
 		avcodec_free_context (&av_codec_context_out);
-		avformat_free_context (av_format_context_out);
+		avformat_free_context (drop_list->av_format_context_out);
 		avcodec_free_context (&av_codec_context_in);
+
 		g_free (drop_list->full_name);
 		g_free (drop_list);
+
 		return;
 	}
 
 	frame_duration = (av_stream_out->time_base.den / av_codec_context_out->framerate.num) * av_codec_context_out->framerate.den;
 
-	packet_in.data = NULL;
-	packet_in.size = 0;
-	av_init_packet (&packet_in);
+	packet_in = av_packet_alloc ();
 
-	packet_out.data = NULL;
-	packet_out.size = 0;
-	av_init_packet (&packet_out);
+	packet_out = av_packet_alloc ();
 
 	frame_in = av_frame_alloc ();
 
 	if (drop_list->pix_fmt_ok && drop_list->field_order_ok && drop_list->color_range_ok && drop_list->color_primaries_ok && drop_list->scale_ok) {
-DEBUG_HYPERDECK_S ("Only codec")
-		while (av_read_frame (av_format_context_in, &packet_in) == 0) {
-			if (packet_in.stream_index != stream_index) {
-				av_packet_unref (&packet_in);
+		LOG_HYPERDECK_STRING(hyperdeck,"Only codec")
+
+		while (av_read_frame (av_format_context_in, packet_in) == 0) {
+			if (packet_in->stream_index != stream_index) {
+				av_packet_unref (packet_in);
+
 				continue;
 			}
 
-			if (avcodec_send_packet (av_codec_context_in, &packet_in) < 0) {
-				av_packet_unref (&packet_in);
+			if (avcodec_send_packet (av_codec_context_in, packet_in) < 0) {
+				av_packet_unref (packet_in);
+
 				continue;
 			}
 
 			av_frame_unref (frame_in);
+
 			if (avcodec_receive_frame (av_codec_context_in, frame_in) < 0) {
-				av_packet_unref (&packet_in);
+				av_packet_unref (packet_in);
+
 				continue;
 			}
 
 			frame_in->pts = video_frame_count * frame_duration;
 			avcodec_send_frame (av_codec_context_out, frame_in);
 
-			avcodec_receive_packet (av_codec_context_out, &packet_out);
-			packet_out.stream_index = av_stream_out->index;
-			packet_out.duration = frame_duration;
-			av_interleaved_write_frame (av_format_context_out, &packet_out);
+			avcodec_receive_packet (av_codec_context_out, packet_out);
+			packet_out->stream_index = av_stream_out->index;
+			packet_out->duration = frame_duration;
+			av_interleaved_write_frame (drop_list->av_format_context_out, packet_out);
 
-			av_packet_unref (&packet_in);
+			av_packet_unref (packet_in);
+
 			video_frame_count++;
 			transcoding_frames[hyperdeck->number].frame_count = video_frame_count;
 		}
@@ -244,10 +254,10 @@ DEBUG_HYPERDECK_S ("Only codec")
 				frame_in->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_in);
 
-				avcodec_receive_packet (av_codec_context_out, &packet_out);
-				packet_out.stream_index = av_stream_out->index;
-				packet_out.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet_out);
+				avcodec_receive_packet (av_codec_context_out, packet_out);
+				packet_out->stream_index = av_stream_out->index;
+				packet_out->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet_out);
 
 				transcoding_frames[hyperdeck->number].frame_count++;
 			}
@@ -258,15 +268,15 @@ DEBUG_HYPERDECK_S ("Only codec")
 		frame_out = av_frame_alloc ();
 		frame_out->format = hyperdeck_pix_fmt;
 		frame_out->chroma_location = HYPERDECK_CHROMA_LOCATION;
-		frame_out->key_frame = 1;
+//		frame_out->key_frame = 1;
 		frame_out->pict_type = AV_PICTURE_TYPE_I;
-		if (progressif) {
+/*		if (progressif) {
 			frame_out->interlaced_frame = 0;
 			frame_out->top_field_first = 0;
 		} else {
 			frame_out->interlaced_frame = 1;
 			frame_out->top_field_first = 1;
-		}
+		}*/
 		frame_out->color_primaries = hyperdeck_color_primaries;
 		frame_out->color_trc = hyperdeck_color_trc;
 		frame_out->colorspace = hyperdeck_colorspace;
@@ -276,43 +286,48 @@ DEBUG_HYPERDECK_S ("Only codec")
 		frame_out->sample_aspect_ratio = hyperdeck_sample_aspect_ratio;
 
 		if ((progressif && drop_list->field_order_ok /*&& drop_list->color_primaries_ok*/) || (drop_list->scale_ok && drop_list->field_order_ok && !drop_list->pix_fmt_ok)) {
-DEBUG_HYPERDECK_S ("Progressif ou à la bonne taille et à la bonne priorité de trame")
+			LOG_HYPERDECK_STRING(hyperdeck,"Progressif ou à la bonne taille et à la bonne priorité de trame")
+
 			av_frame_get_buffer (frame_out, 0);
 
 			sws_context = sws_getContext (av_codec_context_in->width, av_codec_context_in->height, av_codec_context_in->pix_fmt, hyperdeck_width, nb_lines, hyperdeck_pix_fmt, SWS_BILINEAR, NULL, NULL, NULL);
 
-		if (av_codec_context_in->colorspace == AVCOL_SPC_BT709) inv_table = sws_getCoefficients (SWS_CS_ITU709);
-		else if (av_codec_context_in->colorspace == AVCOL_SPC_BT470BG) inv_table = sws_getCoefficients (SWS_CS_ITU601);
-		else if (av_codec_context_in->colorspace == AVCOL_SPC_SMPTE170M) inv_table = sws_getCoefficients (SWS_CS_SMPTE170M);
-		else if (av_codec_context_in->colorspace == AVCOL_SPC_SMPTE240M) inv_table = sws_getCoefficients (SWS_CS_SMPTE240M);
-		else if (av_codec_context_in->colorspace == AVCOL_SPC_FCC) inv_table = sws_getCoefficients (SWS_CS_FCC);
-		else if ((av_codec_context_in->colorspace == AVCOL_SPC_BT2020_NCL) || (av_codec_context_in->colorspace == AVCOL_SPC_BT2020_CL)) inv_table = sws_getCoefficients (SWS_CS_BT2020);
-		else inv_table = sws_getCoefficients (SWS_CS_DEFAULT);
+/*			if (av_codec_context_in->colorspace == AVCOL_SPC_BT709) inv_table = sws_getCoefficients (SWS_CS_ITU709);
+			else if (av_codec_context_in->colorspace == AVCOL_SPC_BT470BG) inv_table = sws_getCoefficients (SWS_CS_ITU601);
+			else if (av_codec_context_in->colorspace == AVCOL_SPC_SMPTE170M) inv_table = sws_getCoefficients (SWS_CS_SMPTE170M);
+			else if (av_codec_context_in->colorspace == AVCOL_SPC_SMPTE240M) inv_table = sws_getCoefficients (SWS_CS_SMPTE240M);
+			else if (av_codec_context_in->colorspace == AVCOL_SPC_FCC) inv_table = sws_getCoefficients (SWS_CS_FCC);
+			else if ((av_codec_context_in->colorspace == AVCOL_SPC_BT2020_NCL) || (av_codec_context_in->colorspace == AVCOL_SPC_BT2020_CL)) inv_table = sws_getCoefficients (SWS_CS_BT2020);
+			else inv_table = sws_getCoefficients (SWS_CS_DEFAULT);
 
-		if (av_codec_context_in->color_range == AVCOL_RANGE_MPEG) srcRange = 0;
-		else srcRange = 1;
+			if (av_codec_context_in->color_range == AVCOL_RANGE_MPEG) srcRange = 0;
+			else srcRange = 1;
 
 printf ("sws_setColorspaceDetails = %d\n\n", sws_setColorspaceDetails (sws_context, inv_table, srcRange, hyperdeck_yuv2rgb_coefficients, 0, 0, 65536, 65536));
 
 sws_getColorspaceDetails (sws_context, &inv_table, &srcRange, &table, &dstRange, &brightness, &contrast, &saturation);
 printf ("inv_table: %d, %d, %d, %d\n", inv_table[0], inv_table[1], inv_table[2], inv_table[3]);
 printf ("table: %d, %d, %d, %d\n", table[0], table[1], table[2], table[3]);
-printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %d\n", srcRange, dstRange, brightness, contrast, saturation);
+printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %d\n", srcRange, dstRange, brightness, contrast, saturation);*/
 
-			while (av_read_frame (av_format_context_in, &packet_in) == 0) {
-				if (packet_in.stream_index != stream_index) {
-					av_packet_unref (&packet_in);
+			while (av_read_frame (av_format_context_in, packet_in) == 0) {
+				if (packet_in->stream_index != stream_index) {
+					av_packet_unref (packet_in);
+
 					continue;
 				}
 
-				if (avcodec_send_packet (av_codec_context_in, &packet_in) < 0) {
-					av_packet_unref (&packet_in);
+				if (avcodec_send_packet (av_codec_context_in, packet_in) < 0) {
+					av_packet_unref (packet_in);
+
 					continue;
 				}
 
 				av_frame_unref (frame_in);
+
 				if (avcodec_receive_frame (av_codec_context_in, frame_in) < 0) {
-					av_packet_unref (&packet_in);
+					av_packet_unref (packet_in);
+
 					continue;
 				}
 
@@ -321,19 +336,20 @@ printf ("srcRange: %d, dstRange: %d, brightness: %d, contrast: %d, saturation: %
 				frame_out->pts = video_frame_count * frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet_out);
-				packet_out.stream_index = av_stream_out->index;
-				packet_out.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet_out);
+				avcodec_receive_packet (av_codec_context_out, packet_out);
+				packet_out->stream_index = av_stream_out->index;
+				packet_out->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet_out);
 
-				av_packet_unref (&packet_in);
+				av_packet_unref (packet_in);
 				video_frame_count++;
 				transcoding_frames[hyperdeck->number].frame_count = video_frame_count;
 			}
 
 			sws_freeContext (sws_context);
 		} else {
-DEBUG_HYPERDECK_S ("Filter_graph")
+			LOG_HYPERDECK_STRING(hyperdeck,"Filter_graph")
+
 			if (!drop_list->field_order_ok && progressif) {
 				if (drop_list->scale_ok) {
 					if (drop_list->pix_fmt_ok) snprintf (filter_descr, 256, "kerndeint=order=1");
@@ -351,35 +367,47 @@ DEBUG_HYPERDECK_S ("Filter_graph")
 					else snprintf (filter_descr, 256, "fieldorder=tff,scale=w=%d:h=%d:interl=1:in_color_matrix=auto:out_color_matrix=auto:in_range=auto:out_range=tv:force_original_aspect_ratio=disable,format=pix_fmts=%s", hyperdeck_width, nb_lines, av_get_pix_fmt_name (hyperdeck_pix_fmt));
 				}
 			} else if (drop_list->pix_fmt_ok) snprintf (filter_descr, 256, "scale=w=%d:h=%d:interl=1:in_color_matrix=auto:out_color_matrix=auto:in_range=auto:out_range=tv:force_original_aspect_ratio=disable", hyperdeck_width, nb_lines);
-				else snprintf (filter_descr, 256, "scale=w=%d:h=%d:interl=1:in_color_matrix=auto:out_color_matrix=auto:in_range=auto:out_range=tv:force_original_aspect_ratio=disable,format=pix_fmts=%s", hyperdeck_width, nb_lines, av_get_pix_fmt_name (hyperdeck_pix_fmt));
+			else snprintf (filter_descr, 256, "scale=w=%d:h=%d:interl=1:in_color_matrix=auto:out_color_matrix=auto:in_range=auto:out_range=tv:force_original_aspect_ratio=disable,format=pix_fmts=%s", hyperdeck_width, nb_lines, av_get_pix_fmt_name (hyperdeck_pix_fmt));
 
-DEBUG_HYPERDECK_S (filter_descr)
+			LOG_HYPERDECK_STRING(hyperdeck,filter_descr)
+
 			if ((av_filter_graph = create_filter_graph (&av_filter_context_in, &av_filter_context_out, av_codec_context_in, filter_descr)) == NULL) {
 				av_frame_free (&frame_out);
 				av_frame_free (&frame_in);
+
+				av_packet_free (&packet_out);
+				av_packet_free (&packet_in);
+
 				avcodec_free_context (&av_codec_context_out);
-				avformat_free_context (av_format_context_out);
+				avformat_free_context (drop_list->av_format_context_out);
 				avcodec_free_context (&av_codec_context_in);
+
 				g_free (drop_list->full_name);
 				g_free (drop_list);
+
 				return;
 			}
-DEBUG_HYPERDECK_S (avfilter_graph_dump (av_filter_graph, NULL))
 
-			while (av_read_frame (av_format_context_in, &packet_in) == 0) {
-				if (packet_in.stream_index != stream_index) {
-					av_packet_unref (&packet_in);
+			LOG_HYPERDECK_STRING(hyperdeck,avfilter_graph_dump (av_filter_graph, NULL))
+
+			while (av_read_frame (av_format_context_in, packet_in) == 0) {
+				if (packet_in->stream_index != stream_index) {
+					av_packet_unref (packet_in);
+
 					continue;
 				}
 
-				if (avcodec_send_packet (av_codec_context_in, &packet_in) < 0) {
-					av_packet_unref (&packet_in);
+				if (avcodec_send_packet (av_codec_context_in, packet_in) < 0) {
+					av_packet_unref (packet_in);
+
 					continue;
 				}
 
 				av_frame_unref (frame_in);
+
 				if (avcodec_receive_frame (av_codec_context_in, frame_in) < 0) {
-					av_packet_unref (&packet_in);
+					av_packet_unref (packet_in);
+
 					continue;
 				}
 
@@ -389,13 +417,13 @@ DEBUG_HYPERDECK_S (avfilter_graph_dump (av_filter_graph, NULL))
 					frame_out->pts = video_frame_count * frame_duration;
 					avcodec_send_frame (av_codec_context_out, frame_out);
 
-					avcodec_receive_packet (av_codec_context_out, &packet_out);
-					packet_out.stream_index = av_stream_out->index;
-					packet_out.duration = frame_duration;
-					av_interleaved_write_frame (av_format_context_out, &packet_out);
+					avcodec_receive_packet (av_codec_context_out, packet_out);
+					packet_out->stream_index = av_stream_out->index;
+					packet_out->duration = frame_duration;
+					av_interleaved_write_frame (drop_list->av_format_context_out, packet_out);
 				}
 
-				av_packet_unref (&packet_in);
+				av_packet_unref (packet_in);
 				video_frame_count++;
 				transcoding_frames[hyperdeck->number].frame_count = video_frame_count;
 			}
@@ -427,10 +455,10 @@ DEBUG_HYPERDECK_S (avfilter_graph_dump (av_filter_graph, NULL))
 				frame_out->pts += frame_duration;
 				avcodec_send_frame (av_codec_context_out, frame_out);
 
-				avcodec_receive_packet (av_codec_context_out, &packet_out);
-				packet_out.stream_index = av_stream_out->index;
-				packet_out.duration = frame_duration;
-				av_interleaved_write_frame (av_format_context_out, &packet_out);
+				avcodec_receive_packet (av_codec_context_out, packet_out);
+				packet_out->stream_index = av_stream_out->index;
+				packet_out->duration = frame_duration;
+				av_interleaved_write_frame (drop_list->av_format_context_out, packet_out);
 
 				transcoding_frames[hyperdeck->number].frame_count++;
 			}
@@ -442,14 +470,10 @@ DEBUG_HYPERDECK_S (avfilter_graph_dump (av_filter_graph, NULL))
 
 	avformat_close_input (&av_format_context_in);
 
-	av_write_trailer (av_format_context_out);
-	drop_list->ffmpeg_buffer_size = avio_close_dyn_buf (av_format_context_out->pb, &drop_list->ffmpeg_buffer);
+	av_write_trailer (drop_list->av_format_context_out);
+	drop_list->ffmpeg_buffer_size = avio_close_dyn_buf (drop_list->av_format_context_out->pb, &drop_list->ffmpeg_buffer);
 
-g_mutex_lock (&hyperdeck->drop_mutex);
-	drop_list->next = hyperdeck->drop_list_file;
-	hyperdeck->drop_list_file = drop_list;
-	if (hyperdeck->drop_thread == NULL) hyperdeck->drop_thread = g_thread_new (NULL, (GThreadFunc)drop_to_hyperdeck, hyperdeck);
-g_mutex_unlock (&hyperdeck->drop_mutex);
+	add_drop_list_to_hyperdeck_transfert_queue (drop_list, hyperdeck);
 
 	for (i = 0; i < NB_OF_TRANSITIONS; i++) {
 		if (transitions[i].thread[hyperdeck->number] != NULL) {
@@ -460,32 +484,40 @@ g_mutex_unlock (&hyperdeck->drop_mutex);
 
 	av_frame_unref (frame_in);
 	av_frame_free (&frame_in);
+
+	av_packet_free (&packet_out);
+	av_packet_free (&packet_in);
+
 	avcodec_free_context (&av_codec_context_out);
-	avformat_free_context (av_format_context_out);
 	avcodec_free_context (&av_codec_context_in);
-DEBUG_HYPERDECK_S("hyperdeck_transcode_file END")
+
+	LOG_HYPERDECK_STRING(hyperdeck,"hyperdeck_transcode_file () return")
 }
 
 int check_need_for_transcoding (hyperdeck_t* hyperdeck, drop_list_t *drop_list)
 {
 	AVFormatContext *av_format_context_in = NULL;
-	AVCodec *av_codec_in = NULL;
+	const AVCodec *av_codec_in = NULL;
 	AVStream *av_stream_in;
 	AVRational r_frame_rate;
 	float frame_rate;
 	AVCodecParameters *av_stream_in_codec_parameters;
-DEBUG_HYPERDECK_S ("check_need_for_transcoding")
 
-	if (avformat_open_input (&av_format_context_in, drop_list->full_name, NULL, NULL) < 0) return TRUE;
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"check_need_for_transcoding () ",drop_list->full_name)
+
+	if (avformat_open_input (&av_format_context_in, drop_list->full_name, NULL, NULL) < 0) return 0;
 
 	if (avformat_find_stream_info (av_format_context_in, NULL) < 0) {
 		avformat_close_input (&av_format_context_in);
+
 		return 0;
 	}
 
 	drop_list->stream_index = av_find_best_stream (av_format_context_in, AVMEDIA_TYPE_VIDEO, -1, -1, &av_codec_in, 0);
+
 	if (drop_list->stream_index < 0) {
 		avformat_close_input (&av_format_context_in);
+
 		return 0;
 	}
 
@@ -498,9 +530,19 @@ DEBUG_HYPERDECK_S ("check_need_for_transcoding")
 
 	r_frame_rate = av_stream_in->r_frame_rate;
 	frame_rate = ((int)(((float)r_frame_rate.num / (float)r_frame_rate.den) * 1000.0)) / 1000.0;
-DEBUG_S("frame_rate")
-DEBUG_F(frame_rate)
+
+	LOG_HYPERDECK_STRING_INT(hyperdeck,"frame_rate = ",frame_rate)
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"AVCodecID = ",avcodec_get_name (av_codec_in->id))
+
 	av_stream_in_codec_parameters = av_stream_in->codecpar;
+
+	LOG_HYPERDECK_STRING_INT(hyperdeck,"width = ",av_stream_in_codec_parameters->width)
+	LOG_HYPERDECK_STRING_INT(hyperdeck,"height = ",av_stream_in_codec_parameters->height)
+	LOG_HYPERDECK_STRING_INT(hyperdeck,"AVFieldOrder = ", av_stream_in_codec_parameters->field_order)
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"AVPixelFormat = ",av_get_pix_fmt_name (av_stream_in_codec_parameters->format))
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"AVColorRange = ",av_color_range_name (av_stream_in_codec_parameters->color_range))
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"AVColorPrimaries = ",av_color_primaries_name (av_stream_in_codec_parameters->color_primaries))
+	LOG_HYPERDECK_2_STRINGS(hyperdeck,"AVColorSpace = ",av_color_space_name (av_stream_in_codec_parameters->color_space))
 
 	drop_list->codec_ok = FALSE;
 	drop_list->pix_fmt_ok = FALSE;
@@ -522,9 +564,8 @@ DEBUG_F(frame_rate)
 
 	if (av_stream_in_codec_parameters->format == hyperdeck_pix_fmt) drop_list->pix_fmt_ok = TRUE;
 
-	if (((progressif) && ((av_stream_in_codec_parameters->field_order == AV_FIELD_PROGRESSIVE) || (av_stream_in_codec_parameters->field_order == AV_FIELD_UNKNOWN))) || \
-		((!progressif) && ((av_stream_in_codec_parameters->field_order != AV_FIELD_BB) && \
-						(av_stream_in_codec_parameters->field_order != AV_FIELD_BT)))) drop_list->field_order_ok = TRUE;
+	if ((progressif && ((av_stream_in_codec_parameters->field_order == AV_FIELD_PROGRESSIVE) || (av_stream_in_codec_parameters->field_order == AV_FIELD_UNKNOWN))) || \
+		(!progressif && ((av_stream_in_codec_parameters->field_order == AV_FIELD_TT) || (av_stream_in_codec_parameters->field_order == AV_FIELD_UNKNOWN)))) drop_list->field_order_ok = TRUE;
 
 	if (av_stream_in_codec_parameters->color_range == AVCOL_RANGE_JPEG) drop_list->color_range_ok = FALSE;
 
@@ -543,6 +584,7 @@ DEBUG_F(frame_rate)
 							if (drop_list->color_range_ok) {
 								if ((memcmp (av_format_context_in->iformat->name, file_ext, 3) == 0) && (frame_rate == frequency)) {
 									avformat_close_input (&av_format_context_in);
+
 									return 1;
 								} else return 2;
 							}
@@ -570,6 +612,7 @@ DEBUG_F(frame_rate)
 							if (drop_list->color_range_ok) {
 								if ((memcmp (av_format_context_in->iformat->name, file_ext, 3) == 0) && (frame_rate == frequency)) {
 									avformat_close_input (&av_format_context_in);
+
 									return 1;
 								} else return 2;
 							}
@@ -599,6 +642,7 @@ DEBUG_F(frame_rate)
 							if (drop_list->color_range_ok) {
 								if ((memcmp (av_format_context_in->iformat->name, file_ext, 3) == 0) && (frame_rate == frequency)) {
 									avformat_close_input (&av_format_context_in);
+
 									return 1;
 								} else return 2;
 							}
@@ -626,6 +670,7 @@ DEBUG_F(frame_rate)
 							if (drop_list->color_range_ok) {
 								if ((memcmp (av_format_context_in->iformat->name, file_ext, 3) == 0) && (frame_rate == frequency)) {
 									avformat_close_input (&av_format_context_in);
+
 									return 1;
 								} else return 2;
 							}
@@ -655,6 +700,7 @@ DEBUG_F(frame_rate)
 							if (drop_list->color_range_ok) {
 								if ((memcmp (av_format_context_in->iformat->name, file_ext, 3) == 0) && (frame_rate == frequency)) {
 									avformat_close_input (&av_format_context_in);
+
 									return 1;
 								} else return 2;
 							}
@@ -678,6 +724,7 @@ DEBUG_F(frame_rate)
 							if (drop_list->color_range_ok) {
 								if ((memcmp (av_format_context_in->iformat->name, file_ext, 3) == 0) && (frame_rate == frequency)) {
 									avformat_close_input (&av_format_context_in);
+
 									return 1;
 								} else return 2;
 							}
@@ -690,6 +737,8 @@ DEBUG_F(frame_rate)
 		}
 	}
 
+	LOG_HYPERDECK_STRING(hyperdeck,"check_need_for_transcoding () return")
+
 	return 3;
 }
 
@@ -700,17 +749,23 @@ gpointer hyperdeck_remux (hyperdeck_t* hyperdeck)
 	time_t start_time, end_time;
 	struct tm *tm;
 	g_source_label_t *source_label;
-DEBUG_HYPERDECK_S ("hyperdeck_remux")
+
+	LOG_HYPERDECK_STRING(hyperdeck,"hyperdeck_remux ()")
+
 	if (remuxing_frames[index].g_source_id != 0) g_source_remove (remuxing_frames[index].g_source_id);
+
 	remuxing_frames[index].g_source_id = g_timeout_add (500, (GSourceFunc)g_source_update_remuxing_progress_bar, &remuxing_frames[index]);
 
-g_mutex_lock (&hyperdeck->remuxing_mutex);
+	g_mutex_lock (&hyperdeck->remuxing_mutex);
+
 	while (hyperdeck->remuxing_list_file != NULL) {
 		drop_list = hyperdeck->remuxing_list_file;
 		hyperdeck->remuxing_list_file = drop_list->next;
-g_mutex_unlock (&hyperdeck->remuxing_mutex);
+
+		g_mutex_unlock (&hyperdeck->remuxing_mutex);
 
 		if (drop_list->nb_frames != 0) g_idle_add ((GSourceFunc)g_source_init_remuxing_progress_bar, &remuxing_frames[index]);
+
 		remuxing_frames[index].nb_frames = drop_list->nb_frames;
 		remuxing_frames[index].frame_count = 0;
 
@@ -731,7 +786,7 @@ g_mutex_unlock (&hyperdeck->remuxing_mutex);
 
 		g_idle_add ((GSourceFunc)g_source_end_remuxing_progress_bar, &remuxing_frames[index]);
 
-g_mutex_lock (&hyperdeck->remuxing_mutex);
+		g_mutex_lock (&hyperdeck->remuxing_mutex);
 	}
 
 	g_source_remove (remuxing_frames[index].g_source_id);
@@ -747,11 +802,13 @@ g_mutex_lock (&hyperdeck->remuxing_mutex);
 		g_idle_add ((GSourceFunc)g_source_hide_widget, remuxing_frames[index].frame);
 	}
 
-	g_idle_add ((GSourceFunc)g_source_consume_thread, hyperdeck->remuxing_thread);
+	g_idle_add_full (G_PRIORITY_LOW, (GSourceFunc)g_source_consume_thread, hyperdeck->remuxing_thread, NULL);
 	hyperdeck->remuxing_thread = NULL;
-g_mutex_unlock (&hyperdeck->remuxing_mutex);
 
-DEBUG_HYPERDECK_S ("hyperdeck_remux END")
+	g_mutex_unlock (&hyperdeck->remuxing_mutex);
+
+	LOG_HYPERDECK_STRING(hyperdeck,"hyperdeck_remux () return")
+
 	return NULL;
 }
 
@@ -762,21 +819,27 @@ gpointer hyperdeck_transcode (hyperdeck_t* hyperdeck)
 	time_t start_time, end_time;
 	struct tm *tm;
 	g_source_label_t *source_label;
-DEBUG_HYPERDECK_S ("hyperdeck_transcode")
+
+	LOG_HYPERDECK_STRING(hyperdeck,"hyperdeck_transcode ()")
+
 	if (transcoding_frames[index].g_source_id != 0) {
 		g_source_remove (transcoding_frames[index].g_source_id);
 		transcoding_frames[index].g_source_id = 0;
 	}
 
-g_mutex_lock (&hyperdeck->transcoding_mutex);
+	g_mutex_lock (&hyperdeck->transcoding_mutex);
+
 	while (hyperdeck->transcoding_list_file != NULL) {
 		drop_list = hyperdeck->transcoding_list_file;
 		hyperdeck->transcoding_list_file = drop_list->next;
-g_mutex_unlock (&hyperdeck->transcoding_mutex);
+
+		g_mutex_unlock (&hyperdeck->transcoding_mutex);
 
 		if (drop_list->nb_frames == 0) transcoding_frames[index].nb_frames = (int64_t)frequency;
 		else transcoding_frames[index].nb_frames = drop_list->nb_frames;
+
 		transcoding_frames[index].frame_count = 0;
+
 		g_idle_add ((GSourceFunc)g_source_init_transcoding_progress_bar, &transcoding_frames[index]);
 
 		source_label = g_malloc (sizeof (g_source_label_t));
@@ -805,7 +868,7 @@ g_mutex_unlock (&hyperdeck->transcoding_mutex);
 
 		transcoding_frames[index].frame_count = transcoding_frames[index].nb_frames;
 
-g_mutex_lock (&hyperdeck->transcoding_mutex);
+		g_mutex_lock (&hyperdeck->transcoding_mutex);
 	}
 
 	end_time = time (NULL);
@@ -816,11 +879,13 @@ g_mutex_lock (&hyperdeck->transcoding_mutex);
 		transcoding_frames[index].g_source_id = g_timeout_add (-end_time * 1000, g_source_hide_transcoding_progress_bar, GINT_TO_POINTER (index));
 	else g_idle_add (g_source_hide_transcoding_progress_bar, GINT_TO_POINTER (index));
 
-	g_idle_add ((GSourceFunc)g_source_consume_thread, hyperdeck->transcoding_thread);
+	g_idle_add_full (G_PRIORITY_LOW, (GSourceFunc)g_source_consume_thread, hyperdeck->transcoding_thread, NULL);
 	hyperdeck->transcoding_thread = NULL;
-g_mutex_unlock (&hyperdeck->transcoding_mutex);
 
-DEBUG_HYPERDECK_S ("hyperdeck_transcode END")
+	g_mutex_unlock (&hyperdeck->transcoding_mutex);
+
+	LOG_HYPERDECK_STRING(hyperdeck,"hyperdeck_transcode () return")
+
 	return NULL;
 }
 
@@ -828,10 +893,10 @@ void create_transcoding_frames (GtkBox *box)
 {
 	GtkWidget *box1, *box2, *box3, *scrolled_window;
 	int i, j;
-	char label[32];
+	char label[48];
 
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
-		sprintf (label, "HyperDeck n°%d: ré-encapsulage", hyperdecks[i].number + 1);
+		sprintf (label, "HyperDeck n°%d: ré-encapsulage", i + 1);
 		remuxing_frames[i].frame = gtk_frame_new (label);
 		gtk_frame_set_label_align (GTK_FRAME (remuxing_frames[i].frame), 0.03, 0.5);
 		gtk_container_set_border_width (GTK_CONTAINER (remuxing_frames[i].frame), 5);
@@ -851,7 +916,7 @@ void create_transcoding_frames (GtkBox *box)
 			gtk_container_add (GTK_CONTAINER (remuxing_frames[i].frame), box1);
 		gtk_box_pack_start (box, remuxing_frames[i].frame, FALSE, FALSE, 0);
 
-		sprintf (label, "HyperDeck n°%d: encodage", hyperdecks[i].number + 1);
+		sprintf (label, "HyperDeck n°%d: encodage", i + 1);
 		transcoding_frames[i].frame = gtk_frame_new (label);
 		gtk_frame_set_label_align (GTK_FRAME (transcoding_frames[i].frame), 0.03, 0.5);
 		gtk_container_set_border_width (GTK_CONTAINER (transcoding_frames[i].frame), 5);

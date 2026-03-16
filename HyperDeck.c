@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2018-2021 Thomas Paillet <thomas.paillet@net-c.fr
+ * copyright (c) 2018-2021 2026 Thomas Paillet <thomas.paillet@net-c.fr
 
  * This file is part of HyperDeck-Controller.
 
@@ -19,18 +19,19 @@
 
 #include <string.h>
 
+#include "Config.h"
+#include "File.h"
+#include "Fresque.h"
 #include "HyperDeck.h"
+#include "HyperDeck_Codec.h"
 #include "HyperDeck_Protocol.h"
-
-
-#ifdef DEBUG_HYPERDECK
-	GMutex debug_mutex;
-#ifdef _WIN32
-	FILE *debug_file;
-	FILE *debug_hyperdeck[NB_OF_HYPERDECKS];
-	FILE *debug_drop_thread[NB_OF_HYPERDECKS];
-#endif
-#endif
+#include "Logging.h"
+#include "Misc.h"
+#include "Osc.h"
+#include "Pixbufs.h"
+#include "Preset.h"
+#include "Transcoding.h"
+#include "Transition.h"
 
 
 hyperdeck_t hyperdecks[NB_OF_HYPERDECKS];
@@ -41,16 +42,23 @@ GtkCssProvider *css_provider;
 
 PangoFontDescription *font_description;
 
-GtkTargetEntry uri_list_target = {"text/uri-list", 0, 0};
+GtkTargetEntry uri_list_target = { "text/uri-list", 0, 0 };
 
 
-gboolean select_slot (GtkWidget *event_box, GdkEventButton *event, hyperdeck_t *hyperdeck)
+gboolean select_slot_1 (GtkWidget *event_box, GdkEventButton *event, hyperdeck_t *hyperdeck)
 {
 	hyperdeck->timeline_empty_retry = 5;
 
-	if ((event_box == hyperdeck->slot_1_event_box) && (hyperdeck->slot_1_is_mounted)) SEND (hyperdeck, msg_select_slot_id_1)
+	if (hyperdeck->slot_1_is_mounted) SEND (hyperdeck, msg_select_slot_id_1)
 
-	if ((event_box == hyperdeck->slot_2_event_box) && (hyperdeck->slot_2_is_mounted)) SEND (hyperdeck, msg_select_slot_id_2)
+	return GDK_EVENT_STOP;
+}
+
+gboolean select_slot_2 (GtkWidget *event_box, GdkEventButton *event, hyperdeck_t *hyperdeck)
+{
+	hyperdeck->timeline_empty_retry = 5;
+
+	if (hyperdeck->slot_2_is_mounted) SEND (hyperdeck, msg_select_slot_id_2)
 
 	return GDK_EVENT_STOP;
 }
@@ -117,7 +125,7 @@ void del_button_clicked (GtkButton *button, hyperdeck_t *hyperdeck)
 		widget = gtk_label_new ("Etes-vous sûr de vouloir supprimer tous les clips du lecteur");
 		gtk_box_pack_start (GTK_BOX (box1), widget, FALSE, FALSE, 0);
 
-		sprintf (msg, "HyperDeck n°%d, sauf ceux nécessaires aux \"Presets\" ?", hyperdeck->number + 1);
+		sprintf (msg, "HyperDeck %d, sauf ceux nécessaires aux \"Presets\" ?", hyperdeck->number + 1);
 		widget = gtk_label_new (msg);
 		gtk_box_pack_start (GTK_BOX (box1), widget, FALSE, FALSE, 0);
 
@@ -155,9 +163,12 @@ void load_clip (GtkListBox *list_box, GtkListBoxRow *list_box_row, hyperdeck_t *
 	for (clip_list_tmp = hyperdeck->list_of_clips; clip_list_tmp != NULL; clip_list_tmp = clip_list_tmp->next) {
 		if (strcmp (clip_list_tmp->name, name) == 0) {
 			send (hyperdeck->socket, msg_stop, 5, 0);
+
 			deselect_fresque ();
+
 			msg_len = sprintf (msg, "%s%d\n", msg_goto_clip_id_, clip_list_tmp->id);
 			send (hyperdeck->socket, msg, msg_len, 0);
+
 			break;
 		}
 	}
@@ -165,7 +176,9 @@ void load_clip (GtkListBox *list_box, GtkListBoxRow *list_box_row, hyperdeck_t *
 
 gboolean draw_image_14 (GtkWidget *widget, cairo_t *cr, hyperdeck_t *hyperdeck)
 {
+#if NB_OF_HYPERDECKS != 1
 	PangoLayout *pl;
+#endif
 
 	if (!gtk_widget_is_sensitive (widget)) gtk_widget_set_opacity (widget, 0.5);
 	else gtk_widget_set_opacity (widget, 1.0);
@@ -173,6 +186,7 @@ gboolean draw_image_14 (GtkWidget *widget, cairo_t *cr, hyperdeck_t *hyperdeck)
 	gdk_cairo_set_source_pixbuf (cr, pixbuf_14, 0, 0);
 	cairo_paint (cr);
 
+#if NB_OF_HYPERDECKS != 1
 	cairo_set_source_rgba (cr, 1.0, 1.0, 1.0, 0.9);
 	cairo_translate (cr, 123, 193);
 
@@ -181,13 +195,28 @@ gboolean draw_image_14 (GtkWidget *widget, cairo_t *cr, hyperdeck_t *hyperdeck)
 	pango_layout_set_font_description (pl, font_description);
 	pango_cairo_show_layout (cr, pl);
 	g_object_unref(pl);
+#endif
 
 	return GDK_EVENT_STOP;
 }
 
+#if NB_OF_HYPERDECKS == 1
+gboolean image_14_button_press_event (GtkWidget *event_box, GdkEventButton *event)
+{
+	if (event->button != GDK_BUTTON_PRIMARY) {
+		show_config_hyperdecks_window ();
+
+		return GDK_EVENT_STOP;
+	}
+
+	return GDK_EVENT_PROPAGATE;
+}
+#endif
+
 void create_hyperdeck_window (hyperdeck_t *hyperdeck)
 {
 	GtkWidget *box_slot_1, *box_slot_2;
+	GtkWidget *event_box_slot_1, *event_box_slot_2;
 	GtkWidget *box_buttons, *box_list, *scrolled_window;
 
 	GtkWidget *image_1, *image_2, *image_3, *image_4, *image_5, *image_6, *image_7;
@@ -195,6 +224,10 @@ void create_hyperdeck_window (hyperdeck_t *hyperdeck)
 
 	GtkWidget *image_stop_button;
 	GtkWidget *image_del_button;
+
+#if NB_OF_HYPERDECKS == 1
+	GtkWidget *event_box_image_14;
+#endif
 
 	image_1 = gtk_image_new_from_pixbuf (pixbuf_1);
 	image_2 = gtk_image_new_from_pixbuf (pixbuf_2);
@@ -209,6 +242,7 @@ void create_hyperdeck_window (hyperdeck_t *hyperdeck)
 	image_11 = gtk_image_new_from_pixbuf (pixbuf_11);
 	image_12 = gtk_image_new_from_pixbuf (pixbuf_12);
 	image_13 = gtk_image_new_from_pixbuf (pixbuf_13);
+
 	image_14 = gtk_drawing_area_new ();
 	gtk_widget_set_size_request (image_14, 146, 222);
 	g_signal_connect (G_OBJECT (image_14), "draw", G_CALLBACK (draw_image_14), hyperdeck);
@@ -225,11 +259,11 @@ void create_hyperdeck_window (hyperdeck_t *hyperdeck)
 		hyperdeck->image_slot_1_indicator = gtk_image_new_from_pixbuf (pixbuf_S1NS);
 		gtk_box_pack_start (GTK_BOX (box_slot_1), hyperdeck->image_slot_1_indicator, FALSE, FALSE, 0);
 
-		hyperdeck->slot_1_event_box = gtk_event_box_new ();
-		g_signal_connect (G_OBJECT (hyperdeck->slot_1_event_box), "button_press_event", G_CALLBACK (select_slot), hyperdeck);
+		event_box_slot_1 = gtk_event_box_new ();
+		g_signal_connect (G_OBJECT (event_box_slot_1), "button_press_event", G_CALLBACK (select_slot_1), hyperdeck);
 			hyperdeck->image_slot_1 = gtk_image_new_from_pixbuf (pixbuf_S1E);
-			gtk_container_add (GTK_CONTAINER (hyperdeck->slot_1_event_box), hyperdeck->image_slot_1);
-		gtk_box_pack_start (GTK_BOX (box_slot_1), hyperdeck->slot_1_event_box, FALSE, FALSE, 0);
+			gtk_container_add (GTK_CONTAINER (event_box_slot_1), hyperdeck->image_slot_1);
+		gtk_box_pack_start (GTK_BOX (box_slot_1), event_box_slot_1, FALSE, FALSE, 0);
 
 		gtk_box_pack_start (GTK_BOX (box_slot_1), image_2, FALSE, FALSE, 0);
 	gtk_box_pack_start (GTK_BOX (hyperdeck->root_widget), box_slot_1, FALSE, FALSE, 0);
@@ -240,11 +274,11 @@ void create_hyperdeck_window (hyperdeck_t *hyperdeck)
 		hyperdeck->image_slot_2_indicator = gtk_image_new_from_pixbuf (pixbuf_S2NS);
 		gtk_box_pack_start (GTK_BOX (box_slot_2), hyperdeck->image_slot_2_indicator, FALSE, FALSE, 0);
 
-		hyperdeck->slot_2_event_box = gtk_event_box_new ();
-		g_signal_connect (G_OBJECT (hyperdeck->slot_2_event_box), "button_press_event", G_CALLBACK (select_slot), hyperdeck);
+		event_box_slot_2 = gtk_event_box_new ();
+		g_signal_connect (G_OBJECT (event_box_slot_2), "button_press_event", G_CALLBACK (select_slot_2), hyperdeck);
 			hyperdeck->image_slot_2 = gtk_image_new_from_pixbuf (pixbuf_S2E);
-			gtk_container_add (GTK_CONTAINER (hyperdeck->slot_2_event_box), hyperdeck->image_slot_2);
-		gtk_box_pack_start (GTK_BOX (box_slot_2), hyperdeck->slot_2_event_box, FALSE, FALSE, 0);
+			gtk_container_add (GTK_CONTAINER (event_box_slot_2), hyperdeck->image_slot_2);
+		gtk_box_pack_start (GTK_BOX (box_slot_2), event_box_slot_2, FALSE, FALSE, 0);
 
 		gtk_box_pack_start (GTK_BOX (box_slot_2), image_4, FALSE, FALSE, 0);
 	gtk_box_pack_start (GTK_BOX (hyperdeck->root_widget), box_slot_2, FALSE, FALSE, 0);
@@ -304,7 +338,25 @@ void create_hyperdeck_window (hyperdeck_t *hyperdeck)
 		gtk_box_pack_start (GTK_BOX (box_list), image_13, FALSE, FALSE, 0);
 	gtk_box_pack_start (GTK_BOX (hyperdeck->root_widget), box_list, FALSE, FALSE, 0);
 
+#if NB_OF_HYPERDECKS == 1
+		event_box_image_14 = gtk_event_box_new ();
+		g_signal_connect (G_OBJECT (event_box_image_14), "button_press_event", G_CALLBACK (image_14_button_press_event), NULL);
+		gtk_container_add (GTK_CONTAINER (event_box_image_14), image_14);
+	gtk_box_pack_start (GTK_BOX (hyperdeck->root_widget), event_box_image_14, FALSE, FALSE, 0);
+#else
 	gtk_box_pack_start (GTK_BOX (hyperdeck->root_widget), image_14, FALSE, FALSE, 0);
+#endif
+}
+
+gboolean children_window_key_press (GtkWidget *window, GdkEventKey *event)
+{
+	if (event->keyval == GDK_KEY_Escape) {
+		gtk_widget_destroy (window);
+
+		return GDK_EVENT_STOP;
+	}
+
+	return GDK_EVENT_PROPAGATE;
 }
 
 void show_about_window (void)
@@ -319,6 +371,7 @@ void show_about_window (void)
 	gtk_window_set_modal (GTK_WINDOW (about_window), TRUE);
 	gtk_window_set_transient_for (GTK_WINDOW (about_window), GTK_WINDOW (main_window));
 	gtk_window_set_position (GTK_WINDOW (about_window), GTK_WIN_POS_CENTER_ON_PARENT);
+	g_signal_connect (G_OBJECT (about_window), "key-press-event", G_CALLBACK (children_window_key_press), NULL);
 	g_signal_connect (G_OBJECT (about_window), "delete-event", G_CALLBACK (gtk_widget_destroy), NULL);
 
 	box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
@@ -330,7 +383,7 @@ void show_about_window (void)
 		gtk_widget_set_margin_bottom (widget, 3);
 		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
-		widget = gtk_label_new ("Version 2.0");
+		widget = gtk_label_new ("Version 3.0");
 		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
 		widget = gtk_image_new_from_pixbuf (pixbuf_Logo);
@@ -339,6 +392,9 @@ void show_about_window (void)
 		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
 		widget = gtk_label_new ("Blackmagic HyperDeck Ethernet Protocol version: " HYPERDECK_PROTOCOL_VERSION);
+		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
+
+		widget = gtk_label_new ("OpenSoundControl Specification 1.0");
 		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
 		sprintf (gtk_version, "Compiled against GTK+ version: %d.%d.%d", GTK_MAJOR_VERSION, GTK_MINOR_VERSION, GTK_MICRO_VERSION);
@@ -357,7 +413,7 @@ void show_about_window (void)
 		widget = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
 		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
-		widget = gtk_label_new ("Copyright (c) 2018-2021 Thomas Paillet");
+		widget = gtk_label_new ("Copyright (c) 2018-2021 2026 Thomas Paillet");
 		gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
 		widget = gtk_label_new ("GNU General Public License version 3");
@@ -366,6 +422,138 @@ void show_about_window (void)
 
 	gtk_window_set_resizable (GTK_WINDOW (about_window), FALSE);
 	gtk_widget_show_all (about_window);
+}
+
+gboolean select_clip_up (hyperdeck_t *hyperdeck)
+{
+	GtkListBoxRow *list_box_row;
+	gint index;
+
+	list_box_row = gtk_list_box_get_selected_row (GTK_LIST_BOX (hyperdeck->list_box));
+
+	if (list_box_row != NULL) {
+		index = gtk_list_box_row_get_index (list_box_row);
+
+		if (index > 0) {
+			index--;
+			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (hyperdeck->list_box), index);
+			g_signal_emit_by_name (list_box_row, "activate");
+		}
+	} else {
+		list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (hyperdeck->list_box), 0);
+
+		if (list_box_row != NULL) g_signal_emit_by_name (list_box_row, "activate");
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
+gboolean select_clip_down (hyperdeck_t *hyperdeck)
+{
+	GtkListBoxRow *list_box_row;
+	gint index;
+
+	list_box_row = gtk_list_box_get_selected_row (GTK_LIST_BOX (hyperdeck->list_box));
+
+	if (list_box_row != NULL) {
+		index = gtk_list_box_row_get_index (list_box_row);
+
+		if (index < hyperdeck->clip_count - 1) {
+			index++;
+			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (hyperdeck->list_box), index);
+			g_signal_emit_by_name (list_box_row, "activate");
+		}
+	} else {
+		list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (hyperdeck->list_box), hyperdeck->clip_count - 1);
+
+		if (list_box_row != NULL) g_signal_emit_by_name (list_box_row, "activate");
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
+gboolean select_fresque_up (void)
+{
+	gint index;
+	GtkListBoxRow *list_box_row;
+	fresque_batch_t *fresque_batch_tmp;
+
+	index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+	if (current_fresque->parent_fresque_batch != NULL) {
+		if (index == 0) {
+			index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->parent_fresque_batch->list_box_row));
+
+			if (index > 0) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index - 1);
+
+				if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+					fresque_batch_tmp = fresque_batches;
+					while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+					g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), fresque_batch_tmp->nb_fresques - 1), "activate");
+				} else g_signal_emit_by_name (list_box_row, "activate");
+			}
+		} else g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), index - 1), "activate");
+	} else {
+		if (index > 0) {
+
+			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index - 1);
+
+			if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (fresques_list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				fresque_batch_tmp = fresque_batches;
+				while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+				g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), fresque_batch_tmp->nb_fresques - 1), "activate");
+			} else g_signal_emit_by_name (list_box_row, "activate");
+		}
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
+gboolean select_fresque_down (void)
+{
+	gint index;
+	GtkListBoxRow *list_box_row;
+	fresque_batch_t *fresque_batch_tmp;
+
+	index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+	if (current_fresque->parent_fresque_batch != NULL) {
+		if (index < current_fresque->parent_fresque_batch->nb_fresques - 1) {
+			g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), index + 1), "activate");
+		} else {
+			index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->parent_fresque_batch->list_box_row));
+			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 1);
+
+			if (list_box_row != NULL) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+					fresque_batch_tmp = fresque_batches;
+					while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+					g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), 0), "activate");
+				} else g_signal_emit_by_name (list_box_row, "activate");
+			}
+		}
+	} else {
+		list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 1);
+
+		if (list_box_row != NULL) {
+			if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (fresques_list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				fresque_batch_tmp = fresque_batches;
+				while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+				g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), 0), "activate");
+			} else g_signal_emit_by_name (list_box_row, "activate");
+		}
+	}
+
+	return G_SOURCE_REMOVE;
 }
 
 gboolean hyperdeck_main_quit (void)
@@ -379,95 +567,52 @@ gboolean hyperdeck_main_quit (void)
 
 gboolean main_window_key_press (GtkWidget *widget, GdkEventKey *event)
 {
-	gint index;
-	GtkListBoxRow *list_box_row;
-	fresque_batch_t *fresque_batch_tmp;
-
+#if NB_OF_HYPERDECKS == 1
+	if ((event->keyval == GDK_KEY_p) || (event->keyval == GDK_KEY_P) || (event->keyval == GDK_KEY_space)) {
+		if (gtk_widget_get_sensitive (hyperdecks[0].play_button)) gtk_button_clicked (GTK_BUTTON (hyperdecks[0].play_button));
+	} else if ((event->keyval == GDK_KEY_s) || (event->keyval == GDK_KEY_S)) {
+		if (gtk_widget_get_sensitive (hyperdecks[0].stop_button)) gtk_button_clicked (GTK_BUTTON (hyperdecks[0].stop_button));
+	} else if ((event->keyval == GDK_KEY_l) || (event->keyval == GDK_KEY_L)) {
+		gtk_button_clicked (GTK_BUTTON (hyperdecks[0].single_loop_button));
+	} else if (event->keyval == GDK_KEY_Up) {
+		select_clip_up (hyperdecks);
+	} else if (event->keyval == GDK_KEY_Down) {
+		select_clip_down (hyperdecks);
+	} else if ((event->keyval == GDK_KEY_c) || (event->keyval == GDK_KEY_C)) {
+		show_config_hyperdecks_window ();
+#else
 	if ((event->keyval == GDK_KEY_l) || (event->keyval == GDK_KEY_L)) {
 		if (gtk_widget_get_sensitive (fresques_loop_button)) {
 			gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (fresques_loop_button), !gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (fresques_loop_button)));
 		}
-	} else if ((event->keyval == GDK_KEY_space) || (event->keyval == GDK_KEY_p) || (event->keyval == GDK_KEY_P)) {
+	} else if ((event->keyval == GDK_KEY_p) || (event->keyval == GDK_KEY_P) || (event->keyval == GDK_KEY_space)) {
 		if (gtk_widget_get_sensitive (fresques_play_button)) gtk_button_clicked (GTK_BUTTON (fresques_play_button));
 	} else if ((event->keyval == GDK_KEY_s) || (event->keyval == GDK_KEY_S)) {
 		if (gtk_widget_get_sensitive (fresques_stop_button)) gtk_button_clicked (GTK_BUTTON (fresques_stop_button));
 	} else if ((event->keyval == GDK_KEY_Up) && (current_fresque != NULL)) {
-		index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->list_box_row));
-
-		if (current_fresque->parent_fresque_batch != NULL) {
-			if (index == 0) {
-				index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->parent_fresque_batch->list_box_row));
-
-				if (index > 0) {
-					gtk_list_box_unselect_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
-
-					list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index - 1);
-
-					if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
-						fresque_batch_tmp = fresque_batches;
-						while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
-						g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), fresque_batch_tmp->nb_fresques - 1), "activate");
-					} else g_signal_emit_by_name (list_box_row, "activate");
-				}
-			} else g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), index - 1), "activate");
-		} else {
-			if (index > 0) {
-				list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index - 1);
-
-				if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
-					gtk_list_box_unselect_row (GTK_LIST_BOX (fresques_list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
-
-					fresque_batch_tmp = fresque_batches;
-					while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
-					g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), fresque_batch_tmp->nb_fresques - 1), "activate");
-				} else g_signal_emit_by_name (list_box_row, "activate");
-			}
-		}
+		select_fresque_up ();
 	} else if ((event->keyval == GDK_KEY_Down) && (current_fresque != NULL)) {
-		index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->list_box_row));
-
-		if (current_fresque->parent_fresque_batch != NULL) {
-			if (index < current_fresque->parent_fresque_batch->nb_fresques - 1) {
-				g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), index + 1), "activate");
-			} else {
-				index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->parent_fresque_batch->list_box_row));
-				list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 1);
-
-				if (list_box_row != NULL) {
-					gtk_list_box_unselect_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
-
-					if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
-						fresque_batch_tmp = fresque_batches;
-						while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
-						g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), 0), "activate");
-					} else g_signal_emit_by_name (list_box_row, "activate");
-				}
-			}
-		} else {
-			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 1);
-
-			if (list_box_row != NULL) {
-				if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
-					gtk_list_box_unselect_row (GTK_LIST_BOX (fresques_list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
-
-					fresque_batch_tmp = fresque_batches;
-					while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
-					g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), 0), "activate");
-				} else g_signal_emit_by_name (list_box_row, "activate");
-			}
-		}
-	} else if ((event->keyval == GDK_KEY_q) || (event->keyval == GDK_KEY_Q)) hyperdeck_main_quit ();
+		select_fresque_down ();
+#endif
+	} else if ((event->keyval == GDK_KEY_a) || (event->keyval == GDK_KEY_A)) {
+		show_about_window ();
+	} else if ((event->keyval == GDK_KEY_q) || (event->keyval == GDK_KEY_Q)) {
+		hyperdeck_main_quit ();
+	}
 
 	return GDK_EVENT_STOP;
 }
 
 void create_main_window (void)
 {
+#if NB_OF_HYPERDECKS != 1
 	int i;
 
-	GtkWidget *main_box, *hyperdeck_box, *control_box;
-	GtkWidget *menu_bar, *menu_config, *sub_menu_config, *menu_adresses_ip, *menu_presets, *menu_transitions, *separator, *menu_about;
+	GtkWidget *hyperdeck_box, *control_box;
+	GtkWidget *menu_bar, *menu_config, *sub_menu_config, *widget;
 	GtkWidget *frame;
+#endif
+	GtkWidget *main_box;
 
 	main_window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title (GTK_WINDOW (main_window), "Contrôleur Blackmagic HyperDeck");
@@ -476,9 +621,22 @@ void create_main_window (void)
 	g_signal_connect (G_OBJECT (main_window), "key-press-event", G_CALLBACK (main_window_key_press), NULL);
 
 	main_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+
+#if NB_OF_HYPERDECKS == 1
+		create_hyperdeck_window (&hyperdecks[0]);
+
+		gtk_widget_set_sensitive (hyperdecks[0].root_widget, FALSE);
+		gtk_drag_dest_set (hyperdecks[0].root_widget, GTK_DEST_DEFAULT_ALL, &uri_list_target, 1, GDK_ACTION_COPY);
+		g_signal_connect (G_OBJECT (hyperdecks[0].root_widget), "drag-data-received", G_CALLBACK (hyperdeck_drag_data_received), &hyperdecks[0]);
+
+		gtk_box_pack_start (GTK_BOX (main_box), hyperdecks[0].root_widget, FALSE, FALSE, 0);
+
+		create_transcoding_frames (GTK_BOX (main_box));
+#else
 		hyperdeck_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 		for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 			create_hyperdeck_window (&hyperdecks[i]);
+
 			gtk_widget_set_sensitive (hyperdecks[i].root_widget, FALSE);
 			gtk_drag_dest_set (hyperdecks[i].root_widget, GTK_DEST_DEFAULT_ALL, &uri_list_target, 1, GDK_ACTION_COPY);
 			g_signal_connect (G_OBJECT (hyperdecks[i].root_widget), "drag-data-received", G_CALLBACK (hyperdeck_drag_data_received), &hyperdecks[i]);
@@ -492,24 +650,28 @@ void create_main_window (void)
 				sub_menu_config = gtk_menu_new ();
 				gtk_menu_item_set_submenu (GTK_MENU_ITEM (menu_config), sub_menu_config);
 
-				menu_adresses_ip = gtk_menu_item_new_with_label ("HyperDecks");
-				gtk_container_add (GTK_CONTAINER (sub_menu_config), menu_adresses_ip);
-				g_signal_connect (G_OBJECT (menu_adresses_ip), "activate", G_CALLBACK (show_config_hyperdecks_window), NULL);
+				widget = gtk_menu_item_new_with_label ("HyperDecks");
+				gtk_container_add (GTK_CONTAINER (sub_menu_config), widget);
+				g_signal_connect (G_OBJECT (widget), "activate", G_CALLBACK (show_config_hyperdecks_window), NULL);
 
-				menu_presets = gtk_menu_item_new_with_label ("Presets");
-				gtk_container_add (GTK_CONTAINER (sub_menu_config), menu_presets);
-				g_signal_connect (G_OBJECT (menu_presets), "activate", G_CALLBACK (show_config_presets_window), NULL);
+				widget = gtk_menu_item_new_with_label ("Presets");
+				gtk_container_add (GTK_CONTAINER (sub_menu_config), widget);
+				g_signal_connect (G_OBJECT (widget), "activate", G_CALLBACK (show_config_presets_window), NULL);
 
-				menu_transitions = gtk_menu_item_new_with_label ("Transitions");
-				gtk_container_add (GTK_CONTAINER (sub_menu_config), menu_transitions);
-				g_signal_connect (G_OBJECT (menu_transitions), "activate", G_CALLBACK (show_config_transitions_window), NULL);
+				widget = gtk_menu_item_new_with_label ("Transitions");
+				gtk_container_add (GTK_CONTAINER (sub_menu_config), widget);
+				g_signal_connect (G_OBJECT (widget), "activate", G_CALLBACK (show_config_transitions_window), NULL);
 
-				separator = gtk_separator_menu_item_new ();
-				gtk_container_add (GTK_CONTAINER (sub_menu_config), separator);
+				widget = gtk_menu_item_new_with_label ("Paramètres");
+				gtk_container_add (GTK_CONTAINER (sub_menu_config), widget);
+				g_signal_connect (G_OBJECT (widget), "activate", G_CALLBACK (show_config_settings_window), NULL);
 
-				menu_about = gtk_menu_item_new_with_label ("A propos");
-				gtk_container_add (GTK_CONTAINER (sub_menu_config), menu_about);
-				g_signal_connect (G_OBJECT (menu_about), "activate", G_CALLBACK (show_about_window), NULL);
+				widget = gtk_separator_menu_item_new ();
+				gtk_container_add (GTK_CONTAINER (sub_menu_config), widget);
+
+				widget = gtk_menu_item_new_with_label ("A propos");
+				gtk_container_add (GTK_CONTAINER (sub_menu_config), widget);
+				g_signal_connect (G_OBJECT (widget), "activate", G_CALLBACK (show_about_window), NULL);
 			gtk_container_add (GTK_CONTAINER (menu_bar), menu_config);
 			gtk_box_pack_start (GTK_BOX (control_box), menu_bar, FALSE, FALSE, 0);
 
@@ -525,6 +687,7 @@ void create_main_window (void)
 
 			create_transcoding_frames (GTK_BOX (control_box));
 		gtk_box_pack_start (GTK_BOX (main_box), control_box, FALSE, FALSE, 0);
+#endif
 	gtk_container_add (GTK_CONTAINER (main_window), main_box);
 
 	gtk_window_set_resizable (GTK_WINDOW (main_window), FALSE);
@@ -539,18 +702,17 @@ int main (int argc, char** argv)
 	int i, config_ok;
 	GFile *file;
 
-	DEBUG_INIT
-
-	WSAInit ();	//_WIN32
-
 #ifdef _WIN32
-	gtk_init (NULL, NULL);
-#ifndef DEBUG_HYPERDECK
 	FreeConsole ();
-#endif
+
+	WSAInit ();
+
+	gtk_init (NULL, NULL);
 #elif defined (__linux)
 	gtk_init (&argc, &argv);
 #endif
+
+	init_logging ();
 
 	css_provider = gtk_css_provider_new ();
 	file = g_file_new_for_path ("Widgets.css");
@@ -565,9 +727,9 @@ int main (int argc, char** argv)
 		hyperdecks[i].number = i;
 
 		hyperdecks[i].switched_on = TRUE;
-		hyperdecks[i].adresse_ip[0] = '\0';
-		hyperdecks[i].adresse_ip_is_valid = FALSE;
-		hyperdecks[i].connected = TRUE;
+		hyperdecks[i].ip_address[0] = '\0';
+		hyperdecks[i].ip_address_is_valid = FALSE;
+		hyperdecks[i].connected = FALSE;
 
 		hyperdecks[i].connection_thread = NULL;
 		g_mutex_init (&hyperdecks[i].connection_mutex);
@@ -578,7 +740,7 @@ int main (int argc, char** argv)
 		hyperdecks[i].slot_1_disk_list = NULL;
 		hyperdecks[i].slot_2_disk_list = NULL;
 
-		hyperdecks[i].slot_selected = 1;
+		hyperdecks[i].slot_selected = 0;
 		hyperdecks[i].clip_count = 0;
 		hyperdecks[i].list_of_clips = NULL;
 
@@ -587,7 +749,7 @@ int main (int argc, char** argv)
 		hyperdecks[i].play = FALSE;
 		hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
 
-		hyperdecks[i].reboot = FALSE;
+		hyperdecks[i].reboot = TRUE;
 
 		hyperdecks[i].drop_list_file = NULL;
 		g_mutex_init (&hyperdecks[i].drop_mutex);
@@ -609,15 +771,19 @@ int main (int argc, char** argv)
 		hyperdecks[i].timeline_empty_retry = 5;
 	}
 
-	init_fresque_batch ();
-
 	init_file ();
+
+#if NB_OF_HYPERDECKS != 1
+	init_fresque_batch ();
 
 	init_presets ();
 
 	init_transitions ();
+#endif
 
 	init_hyperdeck_codec ();
+
+	init_osc ();
 
 	config_ok = read_config_file ();
 
@@ -627,31 +793,48 @@ int main (int argc, char** argv)
 
 	gtk_widget_show_all (main_window);
 
+#if NB_OF_HYPERDECKS == 1
+	gtk_widget_hide (hyperdecks[0].progress_bar);
+	gtk_widget_hide (transcoding_frames[0].frame);
+	gtk_widget_hide (remuxing_frames[0].frame);
+#else
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
 		gtk_widget_hide (hyperdecks[i].progress_bar);
 		gtk_widget_hide (transcoding_frames[i].frame);
 		gtk_widget_hide (remuxing_frames[i].frame);
-		gtk_widget_hide (add_transition_frame);
 	}
+
+	gtk_widget_hide (add_transition_frame);
+
+	restore_hyperdeck_state ();
+#endif
 
 	if (!config_ok) show_config_hyperdecks_window ();
 
-	restore_hyperdeck_state ();
-
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
-		if (hyperdecks[i].switched_on && hyperdecks[i].adresse_ip_is_valid)
-			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_to_hyperdeck, &hyperdecks[i]);
+		if (hyperdecks[i].switched_on && hyperdecks[i].ip_address_is_valid)
+			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_hyperdeck, &hyperdecks[i]);
 	}
+
+	start_osc ();
+
 
 	gtk_main ();
 
+
+	stop_osc ();
+
 	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
-		if (hyperdecks[i].connected) disconnect_from_hyperdeck (&hyperdecks[i]);
+		if (hyperdecks[i].connected) disconnect_hyperdeck (&hyperdecks[i]);
 	}
 
+#if NB_OF_HYPERDECKS != 1
 	save_hyperdeck_state ();
 
 	for (i = 0; i < NB_OF_TRANSITIONS; i++) g_free (transitions[i].file_name);
+#endif
+
+	stop_logging ();
 
 	gtk_widget_destroy (main_window);
 
@@ -661,3 +844,4 @@ int main (int argc, char** argv)
 
 	return 0;
 }
+

@@ -17,9 +17,11 @@
  * along with HyperDeck-Controller.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <libswscale/swscale.h>
+#include "HyperDeck_Codec.h"
 
-#include "HyperDeck.h"
+#include "Logging.h"
+
+#include <libswscale/swscale.h>
 
 
 char *video_format;
@@ -29,9 +31,9 @@ float frequency = 25.0;		//23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0
 
 int hyperdeck_width = 1920;
 AVRational hyperdeck_sample_aspect_ratio = (AVRational){ 1, 1 };
-enum AVColorPrimaries hyperdeck_color_primaries = AVCOL_PRI_BT709;		//ITU-R BT1361 / IEC 61966-2-4 / SMPTE RP177 Annex B
+enum AVColorPrimaries hyperdeck_color_primaries = AVCOL_PRI_BT709;			//ITU-R BT1361 / IEC 61966-2-4 / SMPTE RP177 Annex B
 enum AVColorTransferCharacteristic hyperdeck_color_trc = AVCOL_TRC_BT709;	//ITU-R BT1361
-enum AVColorSpace hyperdeck_colorspace = AVCOL_SPC_BT709;				//ITU-R BT1361 / IEC 61966-2-4 xvYCC709 / SMPTE RP177 Annex B
+enum AVColorSpace hyperdeck_colorspace = AVCOL_SPC_BT709;					//ITU-R BT1361 / IEC 61966-2-4 xvYCC709 / SMPTE RP177 Annex B
 const int *hyperdeck_yuv2rgb_coefficients;
 AVRational hyperdeck_time_base = (AVRational){ 1, 25 };
 AVRational hyperdeck_framerate = (AVRational){ 25, 1 };
@@ -47,10 +49,10 @@ int codec_quality = 0;
 enum AVPixelFormat hyperdeck_pix_fmt = AV_PIX_FMT_YUV422P10LE;
 int dnxhd_bitrate = 185000000;
 
-AVCodec *av_codec_dnxhd, *av_codec_prores, *av_codec_out;
+const AVCodec *av_codec_dnxhd, *av_codec_prores, *av_codec_out;
 
 
-#define PRORES_ENCODER "prores_ks"									//"prores_aw"
+#define PRORES_ENCODER "prores_ks"	//"prores_aw"
 char *prores_profiles[5] = { "proxy", "lt", "standard", "hq", "4444" };	//{ "0", "1", "2", "3", "4" };
 
 char *dnx_profiles[5] = { "dnxhd", "dnxhd", "dnxhr_lb" , "dnxhr_sq", "dnxhr_hqx" };
@@ -60,7 +62,7 @@ GMutex avcodec_open2_mutex;
 
 void create_output_context (hyperdeck_t* hyperdeck, AVFormatContext **av_format_context, AVCodecContext **av_codec_context, AVStream **av_stream, char *creation_time)
 {
-	char timecode[12];
+	char timecode[24];
 	AVCodecContext *av_codec_context_out;
 	AVStream *av_stream_out;
 	AVDictionary *opts = NULL;
@@ -110,9 +112,11 @@ void create_output_context (hyperdeck_t* hyperdeck, AVFormatContext **av_format_
 //	av_dict_set (&opts, "color_trc", av_color_transfer_name (hyperdeck_color_trc), 0);
 //	av_dict_set (&opts, "colorspace", av_color_space_name (hyperdeck_colorspace), 0);
 
-g_mutex_lock (&avcodec_open2_mutex);
+	g_mutex_lock (&avcodec_open2_mutex);
+
 	avcodec_open2 (av_codec_context_out, av_codec_out, &opts);
-g_mutex_unlock (&avcodec_open2_mutex);
+
+	g_mutex_unlock (&avcodec_open2_mutex);
 
 	av_stream_out = avformat_new_stream (*av_format_context, av_codec_out);
 	avcodec_parameters_from_context (av_stream_out->codecpar, av_codec_context_out);
@@ -155,19 +159,23 @@ g_mutex_unlock (&avcodec_open2_mutex);
 
 AVFilterGraph* create_filter_graph (AVFilterContext **av_filter_context_in, AVFilterContext **av_filter_context_out, AVCodecContext *av_codec_context_in, const char *filter_descr)
 {
-DEBUG_S("create_filter_graph")
 	AVFilterGraph *av_filter_graph;
 	const AVFilter *av_filter_buffer, *av_filter_buffer_sink;
 	AVFilterInOut *av_filter_in, *av_filter_out;
 	char args[128];
 
+	LOG_STRING ("create_filter_graph ()")
+
 	av_filter_graph = avfilter_graph_alloc ();
 
 	av_filter_buffer = avfilter_get_by_name ("buffer");
 	snprintf (args, 128, "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:sar=%d/%d", av_codec_context_in->width, av_codec_context_in->height, av_codec_context_in->pix_fmt, hyperdeck_time_base.num, hyperdeck_time_base.den, av_codec_context_in->sample_aspect_ratio.num, av_codec_context_in->sample_aspect_ratio.den);
-DEBUG_S (args)
+
+	LOG_STRING (args)
+
 	if (avfilter_graph_create_filter (av_filter_context_in, av_filter_buffer, "in", args, NULL, av_filter_graph) < 0) {
 		avfilter_graph_free (&av_filter_graph);
+
 		return NULL;
 	}
 
@@ -186,11 +194,13 @@ DEBUG_S (args)
 	av_filter_out->pad_idx = 0;
 	av_filter_out->next = NULL;
 
-DEBUG_S (filter_descr)
+	LOG_STRING (filter_descr)
+
 	if (avfilter_graph_parse_ptr (av_filter_graph, filter_descr, &av_filter_in, &av_filter_out, NULL) < 0) {
 		avfilter_inout_free (&av_filter_out);
 		avfilter_inout_free (&av_filter_in);
 		avfilter_graph_free (&av_filter_graph);
+
 		return NULL;
 	}
 
@@ -199,7 +209,8 @@ DEBUG_S (filter_descr)
 	avfilter_inout_free (&av_filter_out);
 	avfilter_inout_free (&av_filter_in);
 
-DEBUG_S("create_filter_graph END")
+	LOG_STRING ("create_filter_graph () return")
+
 	return av_filter_graph;
 }
 
@@ -232,9 +243,6 @@ GtkWidget* get_libavfilter_version (void)
 
 void init_hyperdeck_codec (void)
 {
-	av_register_all ();
-	avfilter_register_all ();
-
 	av_codec_dnxhd = avcodec_find_encoder (AV_CODEC_ID_DNXHD);
 	av_codec_prores = avcodec_find_encoder_by_name (PRORES_ENCODER);
 
