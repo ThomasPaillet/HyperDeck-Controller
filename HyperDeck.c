@@ -580,6 +580,8 @@ gboolean main_window_key_press (GtkWidget *widget, GdkEventKey *event)
 		select_clip_down (hyperdecks);
 	} else if ((event->keyval == GDK_KEY_c) || (event->keyval == GDK_KEY_C)) {
 		show_config_hyperdecks_window ();
+	} else if ((event->keyval == GDK_KEY_a) || (event->keyval == GDK_KEY_A)) {
+		show_about_window ();
 #else
 	if ((event->keyval == GDK_KEY_l) || (event->keyval == GDK_KEY_L)) {
 		if (gtk_widget_get_sensitive (fresques_loop_button)) {
@@ -594,8 +596,6 @@ gboolean main_window_key_press (GtkWidget *widget, GdkEventKey *event)
 	} else if ((event->keyval == GDK_KEY_Down) && (current_fresque != NULL)) {
 		select_fresque_down ();
 #endif
-	} else if ((event->keyval == GDK_KEY_a) || (event->keyval == GDK_KEY_A)) {
-		show_about_window ();
 	} else if ((event->keyval == GDK_KEY_q) || (event->keyval == GDK_KEY_Q)) {
 		hyperdeck_main_quit ();
 	}
@@ -621,7 +621,6 @@ void create_main_window (void)
 	g_signal_connect (G_OBJECT (main_window), "key-press-event", G_CALLBACK (main_window_key_press), NULL);
 
 	main_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-
 #if NB_OF_HYPERDECKS == 1
 		create_hyperdeck_window (&hyperdecks[0]);
 
@@ -730,6 +729,11 @@ int main (int argc, char** argv)
 		hyperdecks[i].ip_address[0] = '\0';
 		hyperdecks[i].ip_address_is_valid = FALSE;
 		hyperdecks[i].connected = FALSE;
+		hyperdecks[i].reboot = TRUE;
+
+		memset (&hyperdecks[i].adresse, 0, sizeof (struct sockaddr_in));
+		hyperdecks[i].adresse.sin_family = AF_INET;
+		hyperdecks[i].adresse.sin_port = htons (9993);
 
 		hyperdecks[i].connection_thread = NULL;
 		g_mutex_init (&hyperdecks[i].connection_mutex);
@@ -748,8 +752,6 @@ int main (int argc, char** argv)
 
 		hyperdecks[i].play = FALSE;
 		hyperdecks[i].loop = SINGLE_CLIP_TRUE_LOOP_TRUE;
-
-		hyperdecks[i].reboot = TRUE;
 
 		hyperdecks[i].drop_list_file = NULL;
 		g_mutex_init (&hyperdecks[i].drop_mutex);

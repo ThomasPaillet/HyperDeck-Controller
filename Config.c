@@ -509,10 +509,23 @@ void save_config_settings (void)
 	}
 }
 
+gboolean g_source_connect_hyperdecks (hyperdeck_t *hyperdeck)
+{
+	int i;
+
+	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
+		if (hyperdecks[i].switched_on && hyperdecks[i].ip_address_is_valid && !hyperdecks[i].connected)
+			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_hyperdeck, &hyperdecks[i]);
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
 void config_hyperdecks_window_ok (GtkWidget *window)
 {
 	int i, j, ip[4];
 	const gchar *entry_buffer_text;
+	char new_ip_address[NB_OF_HYPERDECKS][16];
 	char msg[64];
 	int msg_len;
 	char *new_format;
@@ -527,14 +540,12 @@ void config_hyperdecks_window_ok (GtkWidget *window)
 		}
 
 		if (j == 4) {
-			sprintf (hyperdecks[i].new_ip_address, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+			sprintf (new_ip_address[i], "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
 
 			hyperdecks[i].ip_address_is_valid = TRUE;
 
-			if (strcmp (hyperdecks[i].new_ip_address, hyperdecks[i].ip_address) != 0) {
+			if (strcmp (hyperdecks[i].ip_address, new_ip_address[i]) != 0) {
 				if (hyperdecks[i].connected) disconnect_hyperdeck (&hyperdecks[i]);
-
-				strcpy (hyperdecks[i].ip_address, hyperdecks[i].new_ip_address);
 			}
 		} else {
 			hyperdecks[i].ip_address_is_valid = FALSE;
@@ -545,8 +556,9 @@ void config_hyperdecks_window_ok (GtkWidget *window)
 
 #if NB_OF_HYPERDECKS != 1
 		hyperdecks[i].switched_on = gtk_switch_get_active (GTK_SWITCH (hyperdecks[i].on_off));
-#endif
+
 		if (!hyperdecks[i].switched_on && hyperdecks[i].connected) disconnect_hyperdeck (&hyperdecks[i]);
+#endif
 	}
 
 	new_format = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT (video_format_combo_box_text));
@@ -601,17 +613,25 @@ void config_hyperdecks_window_ok (GtkWidget *window)
 
 	if ((hyperdeck_codec == AV_CODEC_ID_DNXHD) && (codec_quality <= 1)) set_dnxhd_bitrate ();
 
-	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
-		if (hyperdecks[i].switched_on && hyperdecks[i].ip_address_is_valid && !hyperdecks[i].connected && (hyperdecks[i].connection_thread == NULL))
-			hyperdecks[i].connection_thread = g_thread_new (NULL, (GThreadFunc)connect_hyperdeck, &hyperdecks[i]);
-	}
-
 #if NB_OF_HYPERDECKS == 1
 	save_config_settings ();
 #endif
+
+	for (i = 0; i < NB_OF_HYPERDECKS; i++) {
+		if (hyperdecks[i].switched_on && hyperdecks[i].ip_address_is_valid) {
+			if (strcmp (hyperdecks[i].ip_address, new_ip_address[i]) != 0) {
+				strcpy (hyperdecks[i].ip_address, new_ip_address[i]);
+
+				hyperdecks[i].adresse.sin_addr.s_addr = inet_addr (new_ip_address[i]);
+			}
+		}
+	}
+
 	write_config_file ();
 
 	gtk_widget_destroy (window);
+
+	g_idle_add ((GSourceFunc)g_source_connect_hyperdecks, NULL);
 }
 
 gboolean digit_key_press (GtkEntry *entry, GdkEventKey *event)
@@ -1485,9 +1505,11 @@ gboolean read_config_file (void)
 			}
 
 			if (j == 4) {
+				hyperdecks[i].ip_address_is_valid = TRUE;
+
 				sprintf (hyperdecks[i].ip_address, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
 
-				hyperdecks[i].ip_address_is_valid = TRUE;
+				hyperdecks[i].adresse.sin_addr.s_addr = inet_addr (hyperdecks[i].ip_address);
 			} else if (hyperdecks[i].switched_on) return_value = FALSE;
 		} else if (hyperdecks[i].switched_on) return_value = FALSE;
 	}

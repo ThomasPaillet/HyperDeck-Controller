@@ -115,10 +115,10 @@ typedef struct hyperdeck_s {
 	int number;
 
 	gboolean switched_on;
-	char ip_address[16];
-	char new_ip_address[16];
 	gboolean ip_address_is_valid;
+	char ip_address[16];
 	gboolean connected;
+	gboolean reboot;
 
 	SOCKET socket;
 	struct sockaddr_in adresse;
@@ -155,8 +155,6 @@ typedef struct hyperdeck_s {
 
 	GtkWidget *progress_bar;
 	gdouble progress_bar_fraction;
-
-	gboolean reboot;
 
 	drop_list_t *drop_list_file;
 	GMutex drop_mutex;

@@ -1574,14 +1574,14 @@ gboolean close_hyperdeck (hyperdeck_t *hyperdeck)
 	return G_SOURCE_REMOVE;
 }
 
-void receive_response_from_hyperdeck (hyperdeck_t *hyperdeck)
+void receive_response_from_hyperdeck (hyperdeck_t *hyperdeck, SOCKET hyperdeck_socket)
 {
 	int response_code;
 	int i;
 
 	g_mutex_lock (&hyperdeck->connection_mutex);
 
-	while ((hyperdeck->recv_len = recv (hyperdeck->socket, hyperdeck->buffer, sizeof (hyperdeck->buffer), 0)) > 0) {
+	while ((hyperdeck->recv_len = recv (hyperdeck_socket, hyperdeck->buffer, sizeof (hyperdeck->buffer), 0)) > 0) {
 		LOG_HYPERDECK_STRING (hyperdeck,"receive_response_from_hyperdeck")
 
 		hyperdeck->buffer[hyperdeck->recv_len] = '\0';
@@ -1632,7 +1632,7 @@ void receive_response_from_hyperdeck (hyperdeck_t *hyperdeck)
 	g_mutex_unlock (&hyperdeck->connection_mutex);
 
 	hyperdeck->connected = FALSE;
-	closesocket (hyperdeck->socket);
+	closesocket (hyperdeck_socket);
 
 	g_idle_add ((GSourceFunc)close_hyperdeck, hyperdeck);
 }
@@ -1646,18 +1646,14 @@ gboolean g_source_hyperdeck_is_connected (hyperdeck_t *hyperdeck)
 
 gpointer connect_hyperdeck (hyperdeck_t *hyperdeck)
 {
+	SOCKET hyperdeck_socket;
+	GThread *connection_thread = hyperdeck->connection_thread;
+
 	LOG_HYPERDECK_STRING (hyperdeck,"connect_hyperdeck ()")
 
-	hyperdeck->socket = socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	hyperdeck->socket = hyperdeck_socket = socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-	memset (&hyperdeck->adresse, 0, sizeof (struct sockaddr_in));
-	hyperdeck->adresse.sin_family = AF_INET;
-	hyperdeck->adresse.sin_port = htons (9993);
-	hyperdeck->adresse.sin_addr.s_addr = inet_addr (hyperdeck->ip_address);
-
-	if (connect (hyperdeck->socket, (struct sockaddr *) &hyperdeck->adresse, sizeof (struct sockaddr_in)) == 0) {
-		g_idle_add ((GSourceFunc)g_source_hyperdeck_is_connected, hyperdeck);
-
+	if (connect (hyperdeck_socket, (struct sockaddr *)&hyperdeck->adresse, sizeof (struct sockaddr_in)) == 0) {
 		hyperdeck->connected = TRUE;
 		hyperdeck->reboot = TRUE;
 
@@ -1665,8 +1661,14 @@ gpointer connect_hyperdeck (hyperdeck_t *hyperdeck)
 //		SEND (hyperdeck, msg_remote_override)
 		SEND (hyperdeck, msg_configuration)
 
-		receive_response_from_hyperdeck (hyperdeck);
-	} else closesocket (hyperdeck->socket);
+		g_idle_add ((GSourceFunc)g_source_hyperdeck_is_connected, hyperdeck);
+
+		receive_response_from_hyperdeck (hyperdeck, hyperdeck_socket);
+	} else {
+		closesocket (hyperdeck_socket);
+
+		g_idle_add_full (G_PRIORITY_LOW, (GSourceFunc)g_source_consume_thread, connection_thread, NULL);
+	}
 
 	LOG_HYPERDECK_STRING (hyperdeck,"connect_hyperdeck () return")
 
@@ -1675,8 +1677,11 @@ gpointer connect_hyperdeck (hyperdeck_t *hyperdeck)
 
 void disconnect_hyperdeck (hyperdeck_t* hyperdeck)
 {
-	hyperdeck->reboot = FALSE;
+	LOG_HYPERDECK_STRING (hyperdeck,"disconnect_hyperdeck ()")
 
 	send (hyperdeck->socket, msg_quit, 5, 0);
+
+	hyperdeck->connected = FALSE;
+	hyperdeck->reboot = FALSE;
 }
 
