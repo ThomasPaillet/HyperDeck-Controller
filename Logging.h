@@ -131,6 +131,13 @@ if (logging && log_hyperdeck) { \
 	g_mutex_unlock (&logging_mutex); \
 }
 
+#define LOG_HYPERDECK_STRING_FLOAT(h,s,f) \
+if (logging && log_hyperdeck) { \
+	g_mutex_lock (&logging_mutex); \
+	log_hyperdeck_string_float (__FILE__, h, s, f); \
+	g_mutex_unlock (&logging_mutex); \
+}
+
 #define LOG_OSC_STRING(s) \
 if (logging && log_osc) { \
 	g_mutex_lock (&logging_mutex); \
@@ -180,6 +187,20 @@ if (logging && log_osc) { \
 	g_mutex_unlock (&logging_mutex); \
 }
 
+#define LOG_OSC_STRING_LONG(s,l) \
+if (logging && log_osc) { \
+	g_mutex_lock (&logging_mutex); \
+	log_string_long (__FILE__, s, l, osc_log_file); \
+	g_mutex_unlock (&logging_mutex); \
+}
+
+#define LOG_OSC_STRING_FLOAT(s,f) \
+if (logging && log_osc) { \
+	g_mutex_lock (&logging_mutex); \
+	log_string_float (__FILE__, s, f, osc_log_file); \
+	g_mutex_unlock (&logging_mutex); \
+}
+
 #define LOG_OSC_PACKET(a,p,s) \
 if (logging && log_osc) { \
 	g_mutex_lock (&logging_mutex); \
@@ -212,6 +233,10 @@ void log_2_strings (const char *c_source_filename, const char *str1, const char 
 
 void log_string_int (const char *c_source_filename, const char *str, int i, FILE *log_file);
 
+void log_string_long (const char *c_source_filename, const char *str, long l, FILE *log_file);
+
+void log_string_float (const char *c_source_filename, const char *str, float f, FILE *log_file);
+
 void log_hyperdeck_string (const char *c_source_filename, hyperdeck_t *hyperdeck, const char *str);
 
 void log_hyperdeck_int (const char *c_source_filename, hyperdeck_t *hyperdeck, int i);
@@ -227,6 +252,8 @@ void log_hyperdeck_2_strings (const char *c_source_filename, hyperdeck_t *hyperd
 void log_hyperdeck_string_int (const char *c_source_filename, hyperdeck_t *hyperdeck, const char *str, int i);
 
 void log_hyperdeck_string_long (const char *c_source_filename, hyperdeck_t *hyperdeck, const char *str, long l);
+
+void log_hyperdeck_string_float (const char *c_source_filename, hyperdeck_t *hyperdeck, const char *str, float f);
 
 void log_osc_packet (const char *ip_address, const char *packet, int size);
 

@@ -171,6 +171,44 @@ void log_string_int (const char *c_source_filename, const char *str, int i, FILE
 	g_date_time_unref (current_time);
 }
 
+void log_string_long (const char *c_source_filename, const char *str, long l, FILE *log_file)
+{
+	GDateTime *current_time;
+
+	current_time = g_date_time_new_now_local ();
+
+	log_buffer_size = sprintf (log_buffer, "%02dh %02dm %02ds %03dms: [%s] %s%ld\n\n", g_date_time_get_hour (current_time), g_date_time_get_minute (current_time), g_date_time_get_second (current_time), g_date_time_get_microsecond (current_time) / 1000, c_source_filename, str, l);
+
+	fwrite (log_buffer, log_buffer_size, 1, main_log_file);
+	F_SYNC (main_log_file);
+
+	if (log_file != NULL) {
+		fwrite (log_buffer, log_buffer_size, 1, log_file);
+		F_SYNC (log_file);
+	}
+
+	g_date_time_unref (current_time);
+}
+
+void log_string_float (const char *c_source_filename, const char *str, float f, FILE *log_file)
+{
+	GDateTime *current_time;
+
+	current_time = g_date_time_new_now_local ();
+
+	log_buffer_size = sprintf (log_buffer, "%02dh %02dm %02ds %03dms: [%s] %s%f\n\n", g_date_time_get_hour (current_time), g_date_time_get_minute (current_time), g_date_time_get_second (current_time), g_date_time_get_microsecond (current_time) / 1000, c_source_filename, str, f);
+
+	fwrite (log_buffer, log_buffer_size, 1, main_log_file);
+	F_SYNC (main_log_file);
+
+	if (log_file != NULL) {
+		fwrite (log_buffer, log_buffer_size, 1, log_file);
+		F_SYNC (log_file);
+	}
+
+	g_date_time_unref (current_time);
+}
+
 void log_hyperdeck_string (const char *c_source_filename, hyperdeck_t *hyperdeck, const char *str)
 {
 	GDateTime *current_time;
@@ -297,6 +335,23 @@ void log_hyperdeck_string_long (const char *c_source_filename, hyperdeck_t *hype
 	current_time = g_date_time_new_now_local ();
 
 	log_buffer_size = sprintf (log_buffer, "%02dh %02dm %02ds %03dms: [%s] HyperDeck %s (%s) %s%ld\n\n", g_date_time_get_hour (current_time), g_date_time_get_minute (current_time), g_date_time_get_second (current_time), g_date_time_get_microsecond (current_time) / 1000, c_source_filename, hyperdeck->name, hyperdeck->ip_address, str, l);
+
+	fwrite (log_buffer, log_buffer_size, 1, main_log_file);
+	fwrite (log_buffer, log_buffer_size, 1, hyperdeck_log_files[hyperdeck->number]);
+
+	F_SYNC (main_log_file);
+	F_SYNC (hyperdeck_log_files[hyperdeck->number]);
+
+	g_date_time_unref (current_time);
+}
+
+void log_hyperdeck_string_float (const char *c_source_filename, hyperdeck_t *hyperdeck, const char *str, float f)
+{
+	GDateTime *current_time;
+
+	current_time = g_date_time_new_now_local ();
+
+	log_buffer_size = sprintf (log_buffer, "%02dh %02dm %02ds %03dms: [%s] HyperDeck %s (%s) %s%f\n\n", g_date_time_get_hour (current_time), g_date_time_get_minute (current_time), g_date_time_get_second (current_time), g_date_time_get_microsecond (current_time) / 1000, c_source_filename, hyperdeck->name, hyperdeck->ip_address, str, f);
 
 	fwrite (log_buffer, log_buffer_size, 1, main_log_file);
 	fwrite (log_buffer, log_buffer_size, 1, hyperdeck_log_files[hyperdeck->number]);

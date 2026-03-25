@@ -229,6 +229,8 @@ gboolean response_device_info (hyperdeck_t *hyperdeck)									//204 device info
 		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "protocol version: ", 17) == 0) {	//protocol version: HYPERDECK_PROTOCOL_VERSION
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "protocol version: %s\n", hyperdeck->protocol_version);
 
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"protocol version = ",hyperdeck->protocol_version)
+
 			continue;
 		}
 
@@ -358,6 +360,7 @@ void response_clips_info_suite (hyperdeck_t *hyperdeck, int *clip_count)
 	}
 
 	hyperdeck->buffer[hyperdeck->recv_len] = '\0';
+
 	LOG_HYPERDECK_STRING (hyperdeck,"[buffer]")
 	LOG_HYPERDECK_STRING (hyperdeck,hyperdeck->buffer)
 
@@ -449,6 +452,7 @@ gboolean response_clips_info (hyperdeck_t *hyperdeck)										//205 clips info:
 
 		if (clip_list_tmp == NULL) {
 			g_timeout_add (REFRESH_WAITING_TIME, (GSourceFunc)refresh_hyperdeck_list_of_clips, hyperdeck);
+
 			break;
 		}
 	}
@@ -695,7 +699,7 @@ gboolean response_transport_info (hyperdeck_t *hyperdeck)								//208 transport
 			continue;
 		}
 
-		if (strncmp (hyperdeck->buffer + hyperdeck->index, "video format: ", 12) == 0) {	//video format: {}
+		if (strncmp (hyperdeck->buffer + hyperdeck->index, "video format: ", 13) == 0) {	//video format: {}
 /*			if (strncmp (hyperdeck->buffer + hyperdeck->index + 14, "PAL", 3) == 0) {
 				hyperdeck->video_format.nb_lines = 576;
 				if (hyperdeck->buffer[hyperdeck->index + 17] == 'p') hyperdeck->video_format.progressif = TRUE;
@@ -735,11 +739,11 @@ gboolean response_transport_info (hyperdeck_t *hyperdeck)								//208 transport
 				else if (strncmp (hyperdeck->buffer + hyperdeck->index + 17, "60", 2) == 0) hyperdeck->video_format.frequency = 60.0;
 				hyperdeck->video_format.label = "UHD 4K";
 			}
-DEBUG_HYPERDECK_S ("video format: ")
-LOG_HYPERDECK_INT (hyperdeck,hyperdeck->video_format.nb_lines)
-LOG_HYPERDECK_INT (hyperdeck,(int)hyperdeck->video_format.progressif)
-DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"video_format.nb_lines = ",hyperdeck->video_format.nb_lines)
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"video_format.progressif = ",(int)hyperdeck->video_format.progressif)
+			LOG_HYPERDECK_STRING_FLOAT (hyperdeck,"video_format.frequency = ",hyperdeck->video_format.frequency)
+*/
 			continue;
 		}
 
@@ -774,6 +778,7 @@ DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 		} else {
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_1_indicator), pixbuf_S1NS);
 			gtk_image_set_from_pixbuf (GTK_IMAGE (hyperdeck->image_slot_2_indicator), pixbuf_S2NS);
+
 			gtk_widget_set_sensitive (hyperdeck->play_button, FALSE);
 			gtk_widget_set_opacity (hyperdeck->play_button, 0.75);
 			gtk_widget_set_sensitive (hyperdeck->stop_button, FALSE);
@@ -972,17 +977,20 @@ gboolean response_asynchronous_connection_info (hyperdeck_t *hyperdeck)					//50
 
 	for (; hyperdeck->buffer[hyperdeck->index] != '\r'; next_line (hyperdeck)) {
 		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "model: ", 6) == 0) {			//model: Blackmagic HyperDeck Studio Mini
-
 			continue;
 		}
 
 		if (strncmp (&hyperdeck->buffer[hyperdeck->index], "protocol version: ", 17) == 0) {	//protocol version: HYPERDECK_PROTOCOL_VERSION
 			sscanf (&hyperdeck->buffer[hyperdeck->index], "protocol version: %s\n", hyperdeck->protocol_version);
 
+			LOG_HYPERDECK_2_STRINGS (hyperdeck,"protocol version = ",hyperdeck->protocol_version)
+
 			if (strcmp (hyperdeck->protocol_version, HYPERDECK_PROTOCOL_VERSION) != 0) {
 				sprintf (msg, "Hyperdeck n°%d protocol version: %s\nSoftware protocol version: %s", hyperdeck->number + 1, hyperdeck->protocol_version, HYPERDECK_PROTOCOL_VERSION);
 
-				show_message_window (msg);
+				LOG_HYPERDECK_STRING (hyperdeck,msg)
+
+//				show_message_window (msg);
 			}
 
 			continue;
@@ -1248,11 +1256,11 @@ gboolean response_asynchronous_transport_info (hyperdeck_t *hyperdeck)					//508
 				else if (strncmp (hyperdeck->buffer + hyperdeck->index + 17, "60", 2) == 0) hyperdeck->video_format.frequency = 60.0;
 				hyperdeck->video_format.label = "UHD 4K";
 			}
-DEBUG_HYPERDECK_S ("video format: ")
-LOG_HYPERDECK_INT (hyperdeck,hyperdeck->video_format.nb_lines)
-LOG_HYPERDECK_INT (hyperdeck,(int)hyperdeck->video_format.progressif)
-DEBUG_HYPERDECK_F (hyperdeck->video_format.frequency)*/
 
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"video_format.nb_lines = ",hyperdeck->video_format.nb_lines)
+			LOG_HYPERDECK_STRING_INT (hyperdeck,"video_format.progressif = ",(int)hyperdeck->video_format.progressif)
+			LOG_HYPERDECK_STRING_FLOAT (hyperdeck,"video_format.frequency = ",hyperdeck->video_format.frequency)
+*/
 			continue;
 		}
 
@@ -1518,7 +1526,7 @@ gpointer reconnect_hyperdeck (hyperdeck_t *hyperdeck)
 	return NULL;
 }
 
-gboolean close_hyperdeck (hyperdeck_t *hyperdeck)
+gboolean g_source_close_hyperdeck (hyperdeck_t *hyperdeck)
 {
 	disk_list_t *disk_list_tmp;
 
@@ -1634,7 +1642,7 @@ void receive_response_from_hyperdeck (hyperdeck_t *hyperdeck, SOCKET hyperdeck_s
 	hyperdeck->connected = FALSE;
 	closesocket (hyperdeck_socket);
 
-	g_idle_add ((GSourceFunc)close_hyperdeck, hyperdeck);
+	g_idle_add ((GSourceFunc)g_source_close_hyperdeck, hyperdeck);
 }
 
 gboolean g_source_hyperdeck_is_connected (hyperdeck_t *hyperdeck)

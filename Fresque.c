@@ -40,6 +40,90 @@ GtkWidget *fresques_stop_button, *fresques_play_button, *fresques_loop_button, *
 loop_t fresques_loop = SINGLE_CLIP_TRUE_LOOP_FALSE;
 
 
+gboolean g_source_select_fresque_up (void)
+{
+	gint index;
+	GtkListBoxRow *list_box_row;
+	fresque_batch_t *fresque_batch_tmp;
+
+	index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+	if (current_fresque->parent_fresque_batch != NULL) {
+		if (index == 0) {
+			index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->parent_fresque_batch->list_box_row));
+
+			if (index > 0) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index - 1);
+
+				if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+					fresque_batch_tmp = fresque_batches;
+					while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+					g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), fresque_batch_tmp->nb_fresques - 1), "activate");
+				} else g_signal_emit_by_name (list_box_row, "activate");
+			}
+		} else g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), index - 1), "activate");
+	} else {
+		if (index > 0) {
+
+			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index - 1);
+
+			if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (fresques_list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				fresque_batch_tmp = fresque_batches;
+				while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+				g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), fresque_batch_tmp->nb_fresques - 1), "activate");
+			} else g_signal_emit_by_name (list_box_row, "activate");
+		}
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
+gboolean g_source_select_fresque_down (void)
+{
+	gint index;
+	GtkListBoxRow *list_box_row;
+	fresque_batch_t *fresque_batch_tmp;
+
+	index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+	if (current_fresque->parent_fresque_batch != NULL) {
+		if (index < current_fresque->parent_fresque_batch->nb_fresques - 1) {
+			g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), index + 1), "activate");
+		} else {
+			index = gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (current_fresque->parent_fresque_batch->list_box_row));
+			list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 1);
+
+			if (list_box_row != NULL) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (current_fresque->parent_fresque_batch->list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+					fresque_batch_tmp = fresque_batches;
+					while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+					g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), 0), "activate");
+				} else g_signal_emit_by_name (list_box_row, "activate");
+			}
+		}
+	} else {
+		list_box_row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresques_list_box), index + 1);
+
+		if (list_box_row != NULL) {
+			if (G_OBJECT_TYPE (gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (list_box_row))))) == GTK_TYPE_FRAME) {
+				gtk_list_box_unselect_row (GTK_LIST_BOX (fresques_list_box), GTK_LIST_BOX_ROW (current_fresque->list_box_row));
+
+				fresque_batch_tmp = fresque_batches;
+				while (GTK_LIST_BOX_ROW (fresque_batch_tmp->list_box_row) != list_box_row) fresque_batch_tmp = fresque_batch_tmp->next;
+				g_signal_emit_by_name (gtk_list_box_get_row_at_index (GTK_LIST_BOX (fresque_batch_tmp->list_box), 0), "activate");
+			} else g_signal_emit_by_name (list_box_row, "activate");
+		}
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
 void clean_fresques (void)
 {
 	fresque_t *fresque_prev, *fresque_tmp;

@@ -47,6 +47,10 @@ extern int fresques_list_box_num;
 extern GtkWidget *fresques_stop_button, *fresques_play_button, *fresques_loop_button;
 
 
+gboolean g_source_select_fresque_up (void);
+
+gboolean g_source_select_fresque_down (void);
+
 void clean_fresques (void);
 
 void deselect_fresque (void);

@@ -197,13 +197,9 @@ gboolean select_slot_2 (GtkWidget *event_box, GdkEventButton *event, hyperdeck_t
 
 gboolean children_window_key_press (GtkWidget *window, GdkEventKey *event);
 
-gboolean select_clip_up (hyperdeck_t *hyperdeck);
+gboolean g_source_select_clip_up (hyperdeck_t *hyperdeck);
 
-gboolean select_clip_down (hyperdeck_t *hyperdeck);
-
-gboolean select_fresque_up (void);
-
-gboolean select_fresque_down (void);
+gboolean g_source_select_clip_down (hyperdeck_t *hyperdeck);
 
 
 #endif
